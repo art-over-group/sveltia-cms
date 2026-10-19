@@ -422,6 +422,20 @@ export const serveSite = async (context, { config, siteOrigin, baseURL }) => {
       });
     },
   );
+  // A DateTime field with the `localize_format` option loads its Day.js locale from the CDN; serve
+  // the installed copy. A locale module imports Day.js by a relative path without the extension,
+  // which the CDN resolves to the `.js` file
+  await context.route(/^https:\/\/unpkg\.com\/dayjs@[^/]+\/esm\//, async (route) => {
+    const path = new URL(route.request().url()).pathname
+      .replace(/^\/dayjs@[^/]+\//, '')
+      .replace(/(?<!\.js)$/, '.js');
+
+    await route.fulfill({
+      contentType: 'text/javascript',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: await readFile(new URL(`../../node_modules/dayjs/${path}`, import.meta.url)),
+    });
+  });
   // The CMS adds a cache-busting query to the URL, hence the trailing wildcard. A sign-in popup
   // opens the CMS as well, so the config is served to every page of the browser context. Routes
   // added later take precedence, so this one is answered rather than passed on to the server
@@ -497,5 +511,44 @@ export const test = base.extend({
     expect(gitea.unhandled, 'Requests the Gitea mock couldn’t answer').toEqual([]);
   },
 });
+
+/**
+ * Add scripts to the admin page, the way a site extends the CMS: after the CMS `<script>`, and
+ * optionally before it. A single route has to add both, as a later route would fetch the original
+ * page again. The dev server’s admin page loads the CMS as a module, which runs once the page is
+ * parsed, so the script after it is a module too, to run after the CMS all the same.
+ * @param {Page} page Page.
+ * @param {object} scripts Scripts.
+ * @param {string} [scripts.before] Script to run before the CMS is loaded.
+ * @param {string} [scripts.after] Script to run after the CMS is loaded.
+ */
+export const addScripts = async (page, { before, after }) => {
+  const { adminPath } = /** @type {{ adminPath: string }} */ (test.info().project.use);
+
+  await page.route(
+    (url) => url.pathname === adminPath,
+    async (route) => {
+      const response = await route.fetch();
+      let html = await response.text();
+      const isModule = /<script type="module" src=/.test(html);
+
+      if (before) {
+        html = html.replace(
+          /<script (?:type="module" )?src=/,
+          (tag) => `<script>${before}</script>${tag}`,
+        );
+      }
+
+      if (after) {
+        html = html.replace(
+          '</body>',
+          `<script${isModule ? ' type="module"' : ''}>${after}</script></body>`,
+        );
+      }
+
+      await route.fulfill({ response, body: html });
+    },
+  );
+};
 
 export { expect };

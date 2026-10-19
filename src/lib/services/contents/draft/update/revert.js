@@ -1,11 +1,13 @@
 import equal from 'fast-deep-equal';
 
 import { collectFieldValues } from '$lib/services/contents/draft';
-import { getField } from '$lib/services/contents/entry/fields';
+import { getDraftFieldArgs, getField } from '$lib/services/contents/entry/fields';
 import { isKeyPathWithin } from '$lib/services/contents/entry/key-paths';
 import { syncAllDuplicateKeys } from '$lib/services/contents/fields/key-value/duplicate-keys';
 import { getKeyValueField } from '$lib/services/contents/fields/key-value/pairs';
 import { getPairedListKeyPaths } from '$lib/services/contents/fields/list/helpers';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
+import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
 import { isNumeric } from '$lib/services/utils/number';
 
 /**
@@ -115,7 +117,8 @@ export const revertFields = ({
 
       if (
         isDefaultLocale ||
-        [true, 'translate', 'duplicate_keys'].includes(fieldConfig?.i18n ?? false)
+        isFieldTranslatable(fieldConfig?.i18n) ||
+        fieldConfig?.i18n === 'duplicate_keys'
       ) {
         if (reset) {
           delete currentValues[locale][_keyPath];
@@ -142,20 +145,10 @@ export const revertFields = ({
  * just the translatable ones, like in the default locale.
  */
 export const revertLocale = ({ draft, keyPath, locale, revertAll = false }) => {
-  const {
-    collection,
-    collectionName,
-    collectionFile,
-    fileName,
-    currentValues,
-    originalValues,
-    isIndexFile,
-  } = draft;
-
-  const { defaultLocale } = (collectionFile ?? collection)._i18n;
+  const { currentValues, originalValues } = draft;
+  const { defaultLocale } = getDraftI18nConfig(draft);
   const isDefaultLocale = revertAll || locale === defaultLocale;
-  /** @type {GetFieldArgs} */
-  const getFieldArgs = { collectionName, fileName, keyPath: '', isIndexFile };
+  const getFieldArgs = getDraftFieldArgs(draft, { keyPath: '' });
   // Resolve original key path for fields inside reordered list items
   const resolved = keyPath ? resolveOriginalKeyPath(currentValues[locale], keyPath) : undefined;
   const originalKeyPath = resolved?.originalKeyPath ?? keyPath;
@@ -199,18 +192,12 @@ const getRevertedPairedListKeyPaths = ({ draft, keyPath }) => {
     return getPairedListKeyPaths(draft.fields);
   }
 
-  const { collectionName, fileName, isIndexFile, currentValues, collection, collectionFile } =
-    draft;
+  const { currentValues } = draft;
+  const { defaultLocale } = getDraftI18nConfig(draft);
 
-  const { defaultLocale } = (collectionFile ?? collection)._i18n;
-
-  const fieldConfig = getField({
-    collectionName,
-    fileName,
-    isIndexFile,
-    keyPath,
-    valueMap: currentValues[defaultLocale],
-  });
+  const fieldConfig = getField(
+    getDraftFieldArgs(draft, { keyPath, valueMap: currentValues[defaultLocale] }),
+  );
 
   return fieldConfig
     ? getPairedListKeyPaths([fieldConfig], keyPath.split('.').slice(0, -1).join('.'))
@@ -228,18 +215,8 @@ const getRevertedPairedListKeyPaths = ({ draft, keyPath }) => {
  * List or Object type, this will likely match multiple fields.
  */
 export const revertChanges = ({ draft, locale: targetLanguage = '', keyPath = '' }) => {
-  const {
-    collection,
-    collectionName,
-    collectionFile,
-    fileName,
-    isIndexFile,
-    currentValues,
-    originalPath,
-    originalSlugs,
-  } = draft;
-
-  const { allLocales, defaultLocale } = (collectionFile ?? collection)._i18n;
+  const { currentValues, originalPath, originalSlugs } = draft;
+  const { allLocales, defaultLocale } = getDraftI18nConfig(draft);
   const locales = targetLanguage ? [targetLanguage] : allLocales;
   // Reverting one field or one locale only touches values. Reverting everything restores where the
   // entry goes as well — the folder chosen with the path editor and the slugs, which name the file
@@ -268,7 +245,7 @@ export const revertChanges = ({ draft, locale: targetLanguage = '', keyPath = ''
   syncAllDuplicateKeys({
     valueStore: currentValues,
     defaultLocale,
-    getFieldArgs: { collectionName, fileName, isIndexFile },
+    getFieldArgs: getDraftFieldArgs(draft),
   });
 
   if (revertsEverything) {

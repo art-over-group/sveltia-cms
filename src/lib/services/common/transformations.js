@@ -4,14 +4,20 @@ import dayjsCustomParseFormat from 'dayjs/plugin/customParseFormat';
 import dayjsLocalizedFormat from 'dayjs/plugin/localizedFormat';
 import dayjsUTC from 'dayjs/plugin/utc';
 
+import { customStringTransformationRegistry } from '$lib/services/api/registries';
 import { slugify } from '$lib/services/common/slug';
 import { parseDateTimeConfig } from '$lib/services/contents/fields/date-time/config';
-import { getParser, parseWithFormatFallback } from '$lib/services/contents/fields/date-time/parse';
-import { getOrCreateBounded } from '$lib/services/utils/cache';
+import { getFormatLocale } from '$lib/services/contents/fields/date-time/locales';
+import {
+  formatInLocale,
+  getParser,
+  parseWithFormatFallback,
+} from '$lib/services/contents/fields/date-time/parse';
+import { getOrCreate, getOrCreateBounded } from '$lib/services/utils/cache';
 
 /**
- * @import { StringTransformation } from '$lib/types/private';
- * @import { DateTimeField, Field } from '$lib/types/public';
+ * @import { InternalLocaleCode, StringTransformation } from '$lib/types/private';
+ * @import { DateTimeField, Field, StringTransformer } from '$lib/types/public';
  */
 
 /**
@@ -44,12 +50,85 @@ dayjs.extend(dayjsUTC);
 const DATE_ONLY_REGEX = /^\d{4}-[01]\d-[0-3]\d$/;
 const DATE_PART_REGEX = /T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z$/;
 
+/**
+ * Names of the built-in string transformations, which can’t be used for a custom transformation.
+ * `localize` is not a transformation but a flag in a slug template, e.g. `{{title | localize}}`.
+ * @see https://sveltiacms.app/en/docs/string-transformations
+ */
+export const BUILTIN_STRING_TRANSFORMATIONS = Object.freeze([
+  'date',
+  'default',
+  'localize',
+  'lower',
+  'slugify',
+  'ternary',
+  'truncate',
+  'upper',
+]);
+
+/**
+ * Regular expression matching a valid custom transformation name: letters, digits and underscores,
+ * not starting with a digit.
+ */
+export const STRING_TRANSFORMATION_NAME_REGEX = /^[A-Za-z_]\w*$/;
+
+/**
+ * Regular expression matching a transformation that isn’t built-in, which may be a custom one, with
+ * or without arguments, e.g. `reverse` or `wrap('[', ']')`.
+ */
+const OTHER_TRANSFORMATION_REGEX = new RegExp(
+  `^(?<method>${STRING_TRANSFORMATION_NAME_REGEX.source.slice(1, -1)})(?:\\((?<args>.*)\\))?$`,
+  's',
+);
+
+/**
+ * Regular expression matching an argument of a transformation that isn’t built-in, along with the
+ * following comma, if any. A string argument is quoted with single quotes, and like
+ * {@link splitTransformations}, a quote only closes the argument before `,` or the end, so it can
+ * contain an apostrophe. A numeric argument is not quoted.
+ */
+const OTHER_TRANSFORMATION_ARG_REGEX =
+  /\s*(?:'(?<string>.*?)'|(?<number>-?\d+(?:\.\d+)?))\s*(?<separator>,|$)/sy;
+
 const TRANSFORMATION_PARSERS = Object.entries({
   date: /^date\('(?<format>.+?)'(?:,\s*'(?<timeZone>.+?)')?\)$/,
   default: /^default\('(?<defaultValue>.+?)'\)$/,
   ternary: /^ternary\('(?<truthyValue>.*?)',\s*'(?<falsyValue>.*?)'\)$/,
   truncate: /^truncate\((?<max>\d+)(?:,\s*'(?<ellipsis>.+?)')?\)$/,
 });
+
+/**
+ * Parse the arguments of a transformation that isn’t built-in, e.g. `10, '…'` for `shorten(10,
+ * '…')`.
+ * @param {string} string Arguments within the parentheses.
+ * @returns {(string | number)[] | undefined} Parsed arguments: a string for a quoted argument and a
+ * number for an unquoted one. `undefined` if any of the arguments is invalid.
+ */
+const parseOtherTransformationArgs = (string) => {
+  /** @type {(string | number)[]} */
+  const args = [];
+
+  if (!string.trim()) {
+    return args;
+  }
+
+  const regex = new RegExp(OTHER_TRANSFORMATION_ARG_REGEX);
+  /** @type {string | undefined} */
+  let separator;
+
+  do {
+    const groups = regex.exec(string)?.groups;
+
+    if (!groups) {
+      return undefined;
+    }
+
+    args.push(groups.string ?? Number(groups.number));
+    ({ separator } = groups);
+  } while (separator);
+
+  return args;
+};
 
 /**
  * Parse a single transformation string into a structured object.
@@ -66,6 +145,22 @@ const parseTransformation = (transformation) => {
         method,
         args: Object.fromEntries(entries.filter(([, value]) => value !== undefined)),
       };
+    }
+  }
+
+  const { method, args } = transformation.match(OTHER_TRANSFORMATION_REGEX)?.groups ?? {};
+
+  // A built-in transformation with invalid arguments, e.g. `truncate('a')`, is left unparsed, so it
+  // doesn’t run with arguments it can’t use
+  if (method && !BUILTIN_STRING_TRANSFORMATIONS.includes(method)) {
+    if (args === undefined) {
+      return { method, args: {} };
+    }
+
+    const customArgs = parseOtherTransformationArgs(args);
+
+    if (customArgs) {
+      return { method, args: {}, customArgs };
     }
   }
 
@@ -135,9 +230,13 @@ export const parseTransformations = (string) =>
         transformations: /** @type {StringTransformation[]} */ (
           Object.freeze(
             rawTransformations.map((tf) => {
-              const { method, args } = parseTransformation(tf);
+              const { method, args, customArgs } = parseTransformation(tf);
 
-              return Object.freeze({ method, args: Object.freeze(args) });
+              return Object.freeze({
+                method,
+                args: Object.freeze(args),
+                ...(customArgs ? { customArgs: Object.freeze(customArgs) } : {}),
+              });
             }),
           )
         ),
@@ -163,15 +262,18 @@ export const applyLowerCaseTransformation = (value) => String(value).toLowerCase
 /**
  * Transform the input value to a formatted string based on the provided format and time zone
  * options. A value other than a `Date` is parsed in the field’s own `format` if it has one,
- * falling back to the default parsing if the value doesn’t match the format.
+ * falling back to the default parsing if the value doesn’t match the format. With the field’s
+ * `localize_format` option, the value is parsed and formatted in the locale the field writes it in.
  * @param {any} value The input value to be transformed into a date string.
  * @param {DateTimeTransformationArgs} args Transformation arguments.
  * @param {DateTimeField} fieldConfig Field configuration containing date and time settings.
+ * @param {InternalLocaleCode} [locale] Locale of the content the value belongs to.
  * @returns {string} The formatted date string if valid, otherwise an empty string.
  */
-export const applyDateTransformation = (value, { format, timeZone }, fieldConfig) => {
+export const applyDateTransformation = (value, { format, timeZone }, fieldConfig, locale) => {
   const sValue = String(value);
   const { format: storedFormat, dateOnly, utc } = parseDateTimeConfig(fieldConfig);
+  const localeKey = storedFormat ? getFormatLocale(fieldConfig, locale) : undefined;
 
   const useUTC =
     timeZone === 'utc' ||
@@ -182,11 +284,16 @@ export const applyDateTransformation = (value, { format, timeZone }, fieldConfig
   const date =
     // A value in a format like `X` (Unix timestamp) can come as a number from the front matter
     storedFormat && !(value instanceof Date)
-      ? parseWithFormatFallback({ value: sValue, format: storedFormat, parseAsUTC: useUTC })
+      ? parseWithFormatFallback({
+          value: sValue,
+          format: storedFormat,
+          parseAsUTC: useUTC,
+          localeKey,
+        })
       : getParser(useUTC)(sValue);
 
   if (date.isValid()) {
-    return date.format(format);
+    return formatInLocale(date, format, localeKey);
   }
 
   return '';
@@ -221,18 +328,71 @@ export const applyTruncateTransformation = (value, { max, ellipsis = '…' }) =>
   truncate(String(value), Number(max), { ellipsis });
 
 /**
+ * Names of the custom transformations that have failed, keyed by the function, so the error is
+ * logged only once for each, rather than for every entry summary or keystroke. A different
+ * function, e.g. a fixed one registered under the same name, starts over.
+ * @type {WeakMap<StringTransformer, Set<string>>}
+ */
+const failedCustomTransformations = new WeakMap();
+
+/**
+ * Apply a custom string transformation registered with `CMS.registerStringTransformation()`. An
+ * error thrown by the function, or a Promise returned by it, is logged once per function and
+ * name, and the value is returned as is, so a broken transformation doesn’t break the UI.
+ * @param {object} args Arguments.
+ * @param {string} args.method Transformation name.
+ * @param {StringTransformer} args.transform Transformation function.
+ * @param {any} args.value Original value to be transformed.
+ * @param {readonly (string | number)[]} [args.customArgs] Transformation arguments.
+ * @param {string} [args.locale] Locale code of the entry content.
+ * @returns {string} Transformed value.
+ */
+export const applyCustomTransformation = ({ method, transform, value, customArgs, locale }) => {
+  try {
+    const result = transform(value, {
+      args: [...(customArgs ?? [])],
+      locale: locale === '_default' ? undefined : locale,
+    });
+
+    // Check for any thenable, not only a native Promise
+    if (typeof (/** @type {any} */ (result)?.then) === 'function') {
+      // Avoid an unhandled rejection
+      /** @type {PromiseLike<any>} */ (result).then(undefined, () => undefined);
+
+      throw new TypeError('The function must return a string, not a Promise');
+    }
+
+    return String(result ?? '');
+  } catch (ex) {
+    const failedNames = getOrCreate(failedCustomTransformations, transform, () => new Set());
+
+    if (!failedNames.has(method)) {
+      failedNames.add(method);
+      // eslint-disable-next-line no-console
+      console.error(
+        `The custom “${method}” string transformation failed. Further errors are not logged:`,
+        ex,
+      );
+    }
+
+    return String(value ?? '');
+  }
+};
+
+/**
  * Apply a single string transformation to the value based on the specified transformation type.
  * @param {object} args Arguments.
  * @param {Field} [args.fieldConfig] Field configuration, used for date transformations.
  * @param {any} args.value Original value to be transformed.
  * @param {StringTransformation} args.transformation Transformation entry.
- * @param {string} [args.locale] BCP 47 language tag passed to the `slugify` transformation.
+ * @param {string} [args.locale] BCP 47 language tag passed to the `slugify` transformation and
+ * custom transformations.
  * @returns {string} Transformed value.
  * @see https://decapcms.org/docs/summary-strings/
  * @see https://sveltiacms.app/en/docs/string-transformations
  */
 export const applyTransformation = ({ fieldConfig, value, transformation, locale }) => {
-  const { method, args } = transformation;
+  const { method, args, customArgs } = transformation;
 
   switch (method) {
     case 'upper':
@@ -249,6 +409,7 @@ export const applyTransformation = ({ fieldConfig, value, transformation, locale
         value,
         /** @type {DateTimeTransformationArgs} */ (args),
         /** @type {DateTimeField} */ (fieldConfig ?? {}),
+        locale,
       );
     case 'default':
       return applyDefaultTransformation(value, /** @type {DefaultTransformationArgs} */ (args));
@@ -256,8 +417,16 @@ export const applyTransformation = ({ fieldConfig, value, transformation, locale
       return ternaryTransformation(value, /** @type {TernaryTransformationArgs} */ (args));
     case 'truncate':
       return applyTruncateTransformation(value, /** @type {TruncateTransformationArgs} */ (args));
-    default:
+
+    default: {
+      const transform = customStringTransformationRegistry.get(method);
+
+      if (transform) {
+        return applyCustomTransformation({ method, transform, value, customArgs, locale });
+      }
+
       return String(value);
+    }
   }
 };
 

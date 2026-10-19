@@ -1,4 +1,19 @@
+import { customPreviewTemplateRegistry } from '$lib/services/api/registries';
 import { escapeAttr } from '$lib/services/utils/string';
+
+/**
+ * @import { CustomPreviewTemplate } from '$lib/types/public';
+ */
+
+/**
+ * Get the custom preview template registered for an entry.
+ * @param {object} args Arguments.
+ * @param {string} [args.collectionName] Collection name, or `_singletons` for a singleton file.
+ * @param {string} [args.fileName] File name in a file/singleton collection.
+ * @returns {CustomPreviewTemplate | undefined} Template, if any.
+ */
+export const getPreviewTemplate = ({ collectionName, fileName }) =>
+  customPreviewTemplateRegistry.get(/** @type {string} */ (fileName ?? collectionName));
 
 /**
  * Build the HTML document loaded into the iframe of a preview that uses custom preview styles or a

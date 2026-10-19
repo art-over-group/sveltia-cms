@@ -3,7 +3,11 @@ import {
   getLocalGitStatus,
   saveAndCommitChanges,
 } from '$lib/services/backends/fs/git';
-import { getScopedRootDirHandle, readFile } from '$lib/services/backends/fs/shared/handles';
+import {
+  getScopedRootDirHandle,
+  isTypeMismatchError,
+  readFile,
+} from '$lib/services/backends/fs/shared/handles';
 import { loadFiles } from '$lib/services/backends/fs/shared/load';
 import { saveChanges } from '$lib/services/backends/fs/shared/save';
 import { gitBackendServices } from '$lib/services/backends/git/services';
@@ -124,7 +128,7 @@ export const getRootDirHandle = async ({ forceReload = false, showPicker = true 
       try {
         await handle.getDirectoryHandle('.git');
       } catch (/** @type {any} */ ex) {
-        if (ex.name === 'TypeMismatchError') {
+        if (isTypeMismatchError(ex)) {
           // `.git` exists but is a file (git worktree), which is still a valid repo root
           await handle.getFileHandle('.git');
         } else {
@@ -190,7 +194,12 @@ const signIn = async ({ auto = false }) => {
  * directory handle.
  */
 const signOut = async () => {
-  await rootDirHandleDB?.delete(ROOT_DIR_HANDLE_KEY);
+  try {
+    await rootDirHandleDB?.delete(ROOT_DIR_HANDLE_KEY);
+  } catch {
+    // The handle is only a convenience for the next sign-in, so an IndexedDB failure is ignored
+  }
+
   // Free the memory the Git index takes in a large repository
   clearLocalGitCache();
 };

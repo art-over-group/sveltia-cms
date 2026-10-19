@@ -1,16 +1,20 @@
 import { isObject } from '@sveltia/utils/object';
 
 import { hasComparison } from '$lib/services/common/view';
-import {
-  getCanonicalSlugKey,
-  hasField,
-  METADATA_KEYS,
-} from '$lib/services/config/parser/utils/fields';
+import { SUMMARY_SPECIAL_TAGS } from '$lib/services/config/parser/collections/templates';
+import { getCanonicalSlugKey, hasField } from '$lib/services/config/parser/utils/fields';
+import { checkFieldReferences } from '$lib/services/config/parser/utils/references';
 import { addMessage, checkName } from '$lib/services/config/parser/utils/validator';
 import {
   parseCustomSortableFields,
   parseViewOptions,
 } from '$lib/services/contents/collection/view/options';
+import {
+  getConfiguredTableColumns,
+  isTemplateColumnKey,
+  METADATA_KEYS,
+  SUMMARY_COLUMN_KEY,
+} from '$lib/services/contents/collection/view/table-keys';
 
 /**
  * @import { ConfigParserCollectors } from '$lib/types/private';
@@ -30,7 +34,7 @@ import {
  * generated entry summary and `_manual` for the reorder field.
  * @type {string[]}
  */
-const INTERNAL_SORT_KEYS = ['_summary', '_manual'];
+const INTERNAL_SORT_KEYS = [SUMMARY_COLUMN_KEY, '_manual'];
 
 /**
  * Validate the name and field key path of each option in the `view_groups` or `view_filters`
@@ -138,6 +142,7 @@ export const checkViewOptions = (context, collectors) => {
   const {
     fields,
     sortable_fields: sortableFields,
+    table_columns: tableColumns,
     view_groups: viewGroups,
     view_filters: viewFilters,
   } = context.collection;
@@ -166,6 +171,47 @@ export const checkViewOptions = (context, collectors) => {
         addMessage({
           strKey: 'invalid_sortable_field',
           values: { name: key },
+          context,
+          collectors,
+        });
+      }
+    });
+  }
+
+  // The columns of the table view, given with `table_columns` or its Static CMS alias
+  // `summary_fields`. The entry summary is `_summary`, the same as its sort key, or `summary` in
+  // the alias. A column naming no field would be silently left out of the table. The option types
+  // are checked against the JSON schema
+  const columns = getConfiguredTableColumns(context.collection);
+
+  if (columns) {
+    const columnOption = Array.isArray(tableColumns) ? 'table_columns' : 'summary_fields';
+
+    columns.forEach(({ key }) => {
+      // A template, e.g. `{{dirname}}/{{filename}}`, can use the same tags as a summary template
+      if (typeof key === 'string' && isTemplateColumnKey(key)) {
+        checkFieldReferences({
+          option: columnOption,
+          template: key,
+          specialTags: SUMMARY_SPECIAL_TAGS,
+          fields,
+          context,
+          collectors,
+        });
+
+        return;
+      }
+
+      if (
+        typeof key === 'string' &&
+        key &&
+        key !== SUMMARY_COLUMN_KEY &&
+        !specialKeys.includes(key) &&
+        !hasField(fields, key)
+      ) {
+        addMessage({
+          strKey: 'invalid_table_column_field',
+          values: { option: columnOption, name: key },
           context,
           collectors,
         });

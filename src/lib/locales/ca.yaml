@@ -1565,7 +1565,7 @@ config:
     oauth_implicit_flow: El mètode d’autenticació configurat (flux implícit) no és compatible amb Sveltia CMS. Useu un <a>mètode d’autenticació</a> diferent.
     github_pkce_unsupported: L’autorització PKCE encara no és compatible a causa de les limitacions de GitHub. Useu un <a>mètode d’autenticació</a> diferent.
     oauth_no_app_id: No s’ha definit l’ID de l’aplicació OAuth.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: L’opció `open_authoring` requereix el mode de publicació `editorial_workflow`. Consulteu la <a>documentació</a> per a més detalls.
     # Don’t localize `auth_methods`
     no_auth_methods: L’opció `auth_methods` ha de contenir almenys un mètode.
@@ -1979,26 +1979,8 @@ prefs:
       description: Mostra el subratllat dels enllaços a la previsualització de l’entrada i a les etiquetes de la interfície d’usuari.
       switch_label: Subratlla sempre els enllaços
 
-  # Advanced panel
-  advanced:
-    title: Avançat
-    beta:
-      title: Funcionalitats beta
-      description: Habilita algunes funcionalitats beta que poden ser inestables o no localitzades.
-      switch_label: Uneix-te al programa beta
-    deploy_hook:
-      title: Ganxo de desplegament
-      description: Introduïu un URL de webhook que es cridarà quan activeu manualment un desplegament seleccionant Publica els canvis. Es pot deixar en blanc si useu GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: URL del ganxo
-        saved: URL del ganxo desat.
-        removed: URL del ganxo suprimit.
-      # Authorization header input
-      auth:
-        field_label: Capçalera d’autorització (p. ex., Bearer <testimoni>) (opcional)
-        saved: Capçalera d’autorització desada.
-        removed: Capçalera d’autorització suprimida.
+  # Data Management panel
+  data:
     clear_data:
       title: Esborra les dades
       # Clear File Cache button
@@ -2018,6 +2000,19 @@ prefs:
       title: Mode de desenvolupador
       description: Habilita algunes funcionalitats orientades al desenvolupador, inclosos els registres detallats de la consola i els menús de context nadius.
       switch_label: Habilita el mode de desenvolupador
+    deploy_hook:
+      title: Ganxo de desplegament
+      description: Introduïu un URL de webhook que es cridarà quan activeu manualment un desplegament seleccionant Publica els canvis. Es pot deixar en blanc si useu GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: URL del ganxo
+        saved: URL del ganxo desat.
+        removed: URL del ganxo suprimit.
+      # Authorization header input
+      auth:
+        field_label: Capçalera d’autorització (p. ex., Bearer <testimoni>) (opcional)
+        saved: Capçalera d’autorització desada.
+        removed: Capçalera d’autorització suprimida.
 
 # ==============================================================================
 # Keyboard Shortcuts

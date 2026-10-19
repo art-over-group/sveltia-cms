@@ -1,7 +1,7 @@
 import { openEntryPullRequest, post, WORKFLOW_CONFIG } from '../fixtures/configs/workflow.js';
 import { createPNG } from '../fixtures/files.js';
-import { BASE_CONFIG, expect, test } from '../fixtures/test.js';
-import { getEditor } from '../fixtures/ui.js';
+import { addScripts, BASE_CONFIG, expect, test } from '../fixtures/test.js';
+import { getEditor, getEntryRows } from '../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -21,45 +21,6 @@ const CONFIG = {
       ],
     },
   ],
-};
-
-/**
- * Add scripts to the admin page, the way a site extends the CMS: after the CMS `<script>`, and
- * optionally before it. A single route has to add both, as a later route would fetch the original
- * page again. The dev server’s admin page loads the CMS as a module, which runs once the page is
- * parsed, so the script after it is a module too, to run after the CMS all the same.
- * @param {Page} page Page.
- * @param {object} scripts Scripts.
- * @param {string} [scripts.before] Script to run before the CMS is loaded.
- * @param {string} [scripts.after] Script to run after the CMS is loaded.
- */
-const addScripts = async (page, { before, after }) => {
-  const { adminPath } = /** @type {{ adminPath: string }} */ (test.info().project.use);
-
-  await page.route(
-    (url) => url.pathname === adminPath,
-    async (route) => {
-      const response = await route.fetch();
-      let html = await response.text();
-      const isModule = /<script type="module" src=/.test(html);
-
-      if (before) {
-        html = html.replace(
-          /<script (?:type="module" )?src=/,
-          (tag) => `<script>${before}</script>${tag}`,
-        );
-      }
-
-      if (after) {
-        html = html.replace(
-          '</body>',
-          `<script${isModule ? ' type="module"' : ''}>${after}</script></body>`,
-        );
-      }
-
-      await route.fulfill({ response, body: html });
-    },
-  );
 };
 
 /**
@@ -760,6 +721,119 @@ test.describe('CMS.registerPreviewStyle()', () => {
   });
 });
 
+test.describe('CMS.registerPreviewStyle() with a collection or file', () => {
+  test.use({
+    config: {
+      ...CONFIG,
+      singletons: [
+        {
+          name: 'about',
+          label: 'About',
+          file: 'content/about.md',
+          fields: [
+            { name: 'title', label: 'Title' },
+            { name: 'body', label: 'Body', widget: 'markdown' },
+          ],
+        },
+      ],
+    },
+  });
+
+  test('styles the preview of the given collection or singleton only', async ({ cms, page }) => {
+    await addScripts(page, {
+      after: `
+        CMS.registerPreviewStyle('h1 { color: rgb(200, 0, 0); }', {
+          raw: true,
+          collection: 'posts',
+        });
+        CMS.registerPreviewStyle('h1 { color: rgb(0, 0, 200); }', {
+          raw: true,
+          collection: '_singletons',
+          file: 'about',
+        });
+      `,
+    });
+    await cms.open();
+    await cms.seed({
+      'content/posts/styled.md': '---\ntitle: Styled\n---\n\n# Big News\n',
+      'content/about.md': '---\ntitle: About\n---\n\n# About Us\n',
+    });
+    await cms.signIn();
+    await page.getByRole('row', { name: /Styled/ }).click();
+
+    const frame = page.getByRole('group', { name: 'Preview Content' }).frameLocator('iframe');
+
+    await expect(frame.locator('h1', { hasText: 'Big News' })).toHaveCSS('color', 'rgb(200, 0, 0)');
+
+    await page.evaluate(() => {
+      window.location.hash = '#/collections/_singletons/entries/about';
+    });
+
+    await expect(frame.locator('h1', { hasText: 'About Us' })).toHaveCSS('color', 'rgb(0, 0, 200)');
+  });
+});
+
+test.describe('CMS.registerStringTransformation()', () => {
+  test.use({
+    config: {
+      ...BASE_CONFIG,
+      collections: [
+        {
+          ...BASE_CONFIG.collections[0],
+          summary: "{{title | wrap('[', ' {{fields.body}}]') | upper}}",
+          fields: [
+            { name: 'title', label: 'Title' },
+            { name: 'body', label: 'Body', widget: 'text' },
+            {
+              name: 'initials',
+              label: 'Initials',
+              widget: 'compute',
+              value: '{{fields.title | initials}}',
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  test('applies a custom transformation to a summary and a Compute field', async ({
+    cms,
+    page,
+  }) => {
+    await addScripts(page, {
+      after: `
+        CMS.registerStringTransformation('wrap', (value, { args: [before, after] }) =>
+          before + value + after,
+        );
+        CMS.registerStringTransformation('initials', (value) =>
+          String(value).split(' ').map((word) => word[0]).join(''),
+        );
+      `,
+    });
+    await cms.open();
+    await cms.seed({ 'content/posts/hello.md': '---\ntitle: Hello\n---\n\nWorld\n' });
+    await cms.signIn();
+
+    // The nested template in the argument is resolved before the transformation runs, and the
+    // output is chained to the built-in `upper`
+    await expect(getEntryRows(page)).toHaveText([/\[HELLO WORLD\]/]);
+
+    const editor = await createPost(page, 'Launch Day Party');
+
+    await editor.getByRole('textbox', { name: 'Body' }).fill('Join us!');
+
+    // A Compute field has no control of its own, but its value shows in the preview
+    await expect(
+      editor.getByRole('document', { name: 'Content Preview' }).getByText('LDP'),
+    ).toBeVisible();
+    await editor.getByRole('button', { name: 'Save' }).click();
+
+    await expect
+      .poll(async () => (await cms.readRepo())['content/posts/launch-day-party.md'])
+      .toBe('---\ntitle: Launch Day Party\ninitials: LDP\n---\n\nJoin us!\n');
+  });
+});
+
 test.describe('CMS.registerEventListener()', () => {
   test.use({ config: CONFIG });
 
@@ -837,5 +911,73 @@ test.describe('CMS.registerEventListener()', () => {
         .poll(() => page.evaluate(() => /** @type {any} */ (window).events))
         .toEqual(['prePublish second-post', 'postPublish second-post']);
     });
+  });
+});
+
+test.describe('CMS.registerCustomPage()', () => {
+  test.use({ config: CONFIG });
+
+  test('adds a React page, an embedded page and a link to the toolbar', async ({
+    cms,
+    context,
+    page,
+  }) => {
+    await page.route('**/stats.html', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<h1>Visitor Stats</h1>' }),
+    );
+    await context.route('https://example.com/**', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<h1>Docs</h1>' }),
+    );
+    await addScripts(page, {
+      after: `
+        const Counter = () => {
+          const [count, setCount] = CMS.React.useState(0);
+
+          return h('button', { onClick: () => setCount(count + 1) }, 'Clicked ' + count);
+        };
+
+        CMS.registerCustomPage({ id: 'counter', label: 'Counter', component: Counter });
+        CMS.registerCustomPage({ id: 'stats', label: 'Stats', url: 'stats.html' });
+        CMS.registerCustomPage({
+          id: 'docs',
+          label: 'Docs',
+          icon: 'help',
+          url: 'https://example.com/docs',
+          newTab: true,
+        });
+      `,
+    });
+    await cms.open();
+    await cms.signIn();
+
+    const pages = page.getByRole('radiogroup', { name: 'Switch Page' });
+
+    await pages.getByRole('radio', { name: 'Counter' }).click();
+    await expect(page).toHaveURL(/#\/pages\/counter$/);
+    await expect(pages.getByRole('radio', { name: 'Counter' })).toBeChecked();
+    await expect(page).toHaveTitle(/^Counter – /);
+
+    // The component is a live React component, with working hooks
+    await page.getByRole('button', { name: 'Clicked 0' }).click();
+    await expect(page.getByRole('button', { name: 'Clicked 1' })).toBeVisible();
+
+    await pages.getByRole('radio', { name: 'Stats' }).click();
+    await expect(page).toHaveURL(/#\/pages\/stats$/);
+    await expect(
+      page.frameLocator('iframe[title="Stats"]').getByRole('heading', { name: 'Visitor Stats' }),
+    ).toBeVisible();
+
+    // A link opens in a new tab and leaves the CMS where it was
+    const popupPromise = context.waitForEvent('page');
+
+    await page.getByRole('button', { name: 'Docs' }).click();
+    await expect(await popupPromise).toHaveURL('https://example.com/docs');
+    await expect(page).toHaveURL(/#\/pages\/stats$/);
+
+    // The pages can be opened directly, and back to the content library
+    await page.goto(page.url().replace(/#.*/, '#/pages/counter'));
+    await expect(page.getByRole('button', { name: 'Clicked 0' })).toBeVisible();
+    await pages.getByRole('radio', { name: 'Contents' }).click();
+    await expect(page.getByRole('button', { name: 'Clicked 0' })).toBeHidden();
   });
 });

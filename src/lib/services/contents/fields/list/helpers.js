@@ -1,6 +1,8 @@
 import { isObject } from '@sveltia/utils/object';
 
+import { getAllSubFields, someSubField } from '$lib/services/contents/fields/list/subfields';
 import { formatSummary as formatObjectSummary } from '$lib/services/contents/fields/object/helpers';
+import { isDuplicateIfEmptyField } from '$lib/services/contents/i18n/duplicate-if-empty';
 import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
 
 /**
@@ -36,30 +38,21 @@ export const getListFieldInfo = (field) => {
 
 /**
  * Check whether any subfield of the given List or Object field, at any depth, has the `duplicate`
- * i18n strategy. The items of a translatable List field with such a subfield are paired across the
- * locales by their position, as the subfield value is copied to the item at the same position in
- * every other locale.
+ * or `duplicate_if_empty` i18n strategy. The items of a translatable List field with such a
+ * subfield are paired across the locales by their position, as the subfield value is copied to the
+ * item at the same position in every other locale.
  * @param {Field} fieldConfig Field configuration.
  * @returns {boolean} Result.
  */
-export const hasDuplicatedSubField = (fieldConfig) => {
-  const {
-    fields = [],
-    field,
-    types = [],
-  } = /** @type {{ fields?: Field[], field?: Field, types?: { fields?: Field[] }[] }} */ (
-    fieldConfig
+export const hasDuplicatedSubField = (fieldConfig) =>
+  getAllSubFields(fieldConfig).some((subField) =>
+    someSubField(subField, (field) => field.i18n === 'duplicate' || isDuplicateIfEmptyField(field)),
   );
-
-  return [...fields, ...(field ? [field] : []), ...types.flatMap((type) => type.fields ?? [])].some(
-    (subField) => subField.i18n === 'duplicate' || hasDuplicatedSubField(subField),
-  );
-};
 
 /**
  * Check whether the given field is a translatable List field whose items are paired across the
- * locales by their position, because it has a subfield with the `duplicate` i18n strategy. Such
- * items are added, removed and moved in every locale at once.
+ * locales by their position, because it has a subfield with the `duplicate` or `duplicate_if_empty`
+ * i18n strategy. Such items are added, removed and moved in every locale at once.
  * @param {Field} fieldConfig Field configuration.
  * @returns {boolean} Result.
  * @see https://github.com/sveltia/sveltia-cms/issues/1065

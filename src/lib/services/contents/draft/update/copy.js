@@ -4,11 +4,12 @@ import { SvelteSet } from 'svelte/reactivity';
 import { createLazyModule } from '$lib/services/api/lazy-module';
 import { loadModule } from '$lib/services/app/dependencies';
 import { copyFromLocaleToast, translatorApiKeyDialogState } from '$lib/services/contents/editor';
-import { getField } from '$lib/services/contents/entry/fields';
+import { getDraftFieldArgs, getField } from '$lib/services/contents/entry/fields';
 import { isKeyPathWithin } from '$lib/services/contents/entry/key-paths';
 import { RICH_TEXT_FIELD_TYPES, TEXT_FIELD_TYPES } from '$lib/services/contents/fields';
 import { getListFieldInfo } from '$lib/services/contents/fields/list/helpers';
 import { getValueFormat } from '$lib/services/contents/fields/rich-text';
+import { isDuplicateIfEmptyField } from '$lib/services/contents/i18n/duplicate-if-empty';
 import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
 import { translator } from '$lib/services/integrations/translators';
 import { prefs } from '$lib/services/user/prefs.svelte';
@@ -172,10 +173,10 @@ const getCopyI18nOption = ({ field, getFieldArgs }) => {
  * @returns {CopyingFieldMap} Copied or translated field values.
  */
 export const getCopyingFieldMap = ({ draft, options }) => {
-  const { collectionName, fileName, currentValues, isIndexFile } = draft;
+  const { currentValues } = draft;
   const { sourceLanguage, targetLanguage, keyPath = '', translate = false } = options;
   const valueMap = currentValues[sourceLanguage];
-  const getFieldArgs = { collectionName, fileName, valueMap, isIndexFile };
+  const getFieldArgs = getDraftFieldArgs(draft, { valueMap });
 
   return Object.fromEntries(
     Object.entries(valueMap)
@@ -199,8 +200,13 @@ export const getCopyingFieldMap = ({ draft, options }) => {
           (fieldType === 'list' &&
           getListFieldInfo(/** @type {ListField} */ (field)).hasSubFields) ||
           (!translate && value === targetLocaleValue) ||
-          // Skip populated fields when translating all the fields
-          (!keyPath && translate && !!targetLocaleValue)
+          // Skip populated fields when translating all the fields, except for a field using the
+          // `duplicate_if_empty` strategy that still holds the source locale’s value, which hasn’t
+          // been translated yet
+          (!keyPath &&
+            translate &&
+            !!targetLocaleValue &&
+            !(!!field && isDuplicateIfEmptyField(field) && value === targetLocaleValue))
         ) {
           return null;
         }

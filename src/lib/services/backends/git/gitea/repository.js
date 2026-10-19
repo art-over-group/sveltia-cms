@@ -1,8 +1,8 @@
 import { recordBranchAccess } from '$lib/services/backends/branch-access';
 import { fetchAPI } from '$lib/services/backends/git/shared/api';
 import {
-  createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createNoAccessError,
+  createNoWriteAccessError,
   toRepositoryAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
@@ -123,7 +123,9 @@ export const checkRepositoryAccess = async () => {
   }
 
   if (!result.permissions?.push) {
-    throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', { repo });
+    // A repository that comes back without read permission, e.g. one with limited visibility, isn’t
+    // one the user can work with at all, so it’s no access rather than missing write access
+    throw result.permissions?.pull ? createNoWriteAccessError(repo) : createNoAccessError(repo);
   }
 };
 

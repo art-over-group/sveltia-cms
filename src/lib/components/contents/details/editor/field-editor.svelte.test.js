@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 
+import { editors } from '$lib/components/contents/details/fields';
 import { customFieldTypeRegistry } from '$lib/services/api/registries';
 import { initTestConfig } from '$lib/test/config';
 import { createMockDraft, renderWithDraft } from '$lib/test/draft';
@@ -49,7 +50,38 @@ const renderEditor = async ({
   return { container, draft };
 };
 
+/**
+ * Component that throws while it’s rendered, standing in for a field editor or preview with a bug.
+ * @throws {TypeError} Always.
+ */
+const BrokenComponent = () => {
+  throw new TypeError('boom');
+};
+
 describe('FieldEditor', () => {
+  test('shows a message in place of an editor that fails, keeping the header', async () => {
+    const { string } = editors;
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    editors.string = /** @type {any} */ (BrokenComponent);
+
+    try {
+      const { container } = await renderEditor({
+        fieldConfig: { name: 'title', widget: 'string', label: 'Title' },
+      });
+
+      const group = page.getByRole('group', { name: /“.Title.” Field/ });
+
+      await expect
+        .element(group.getByRole('alert'))
+        .toMatchTextContent(/this field can’t be displayed\. .*boom/);
+      expect(container.querySelector('h4')).toHaveTextContent('Title');
+    } finally {
+      editors.string = string;
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   test('renders the editor for the field type under a labelled header', async () => {
     const { container } = await renderEditor({
       fieldConfig: { name: 'title', widget: 'string', label: 'Title', hint: 'Keep it *short*' },
@@ -67,6 +99,30 @@ describe('FieldEditor', () => {
     expect(container.querySelector('h4')).toHaveTextContent('Title');
     expect(container.querySelector('.required')).toHaveTextContent('*');
     expect(container.querySelector('.hint')?.innerHTML).toBe('Keep it <em>short</em>');
+  });
+
+  test('shows the label and hint in the locale of the pane', async () => {
+    /** @type {Field} */
+    const fieldConfig = {
+      name: 'title',
+      widget: 'string',
+      i18n: true,
+      label: 'Title',
+      label_localized: { ja: 'タイトル' },
+      hint: 'Keep it short',
+      hint_localized: { ja: '短くしてください' },
+    };
+
+    const { container } = await renderEditor({ fieldConfig, locale: 'ja', i18nEnabled: true });
+
+    await expect.element(page.getByRole('group', { name: /“.タイトル.” Field/ })).toBeVisible();
+    expect(container.querySelector('.hint')).toHaveTextContent('短くしてください');
+
+    // The default locale has no localized values, so the options themselves are used
+    const { container: container2 } = await renderEditor({ fieldConfig, i18nEnabled: true });
+
+    expect(container2.querySelector('h4')).toHaveTextContent('Title');
+    expect(container2.querySelector('.hint')).toHaveTextContent('Keep it short');
   });
 
   test('writes an edited value to the draft', async () => {
@@ -444,6 +500,7 @@ describe('FieldEditor', () => {
         typedKeyPath: 'number',
         fieldConfig: { name: 'number', label: 'Number', widget: 'number', auto_increment: true },
         context: 'rich-text-editor-component',
+        valueStoreKey: 'extraValues',
       },
     });
 
@@ -466,10 +523,41 @@ describe('FieldEditor', () => {
         typedKeyPath: 'published',
         fieldConfig: { name: 'published', label: 'Published', widget: 'datetime', auto_now: true },
         context: 'rich-text-editor-component',
+        valueStoreKey: 'extraValues',
       },
     });
 
     // The field isn’t set on save there, so it stays an editable input, shown even in a new entry
+    await expect.element(page.getByRole('textbox')).toBeVisible();
+    await expect.element(page.getByRole('textbox')).not.toHaveAttribute('aria-readonly', 'true');
+  });
+
+  test('ignores `auto_now` under a single-subfield List in a rich text editor component', async () => {
+    const draft = createMockDraft({
+      fields: [{ name: 'body', widget: 'richtext' }],
+      i18n: { i18nEnabled: false, defaultLocale: 'en', allLocales: ['en'] },
+      values: { en: {} },
+      draft: { extraValues: { en: { 'body:c1:dates.0': '' } } },
+    });
+
+    // The List gives its only subfield a context of its own, which mustn’t hide the component
+    await renderWithDraft(FieldEditor, {
+      draft,
+      props: {
+        locale: 'en',
+        keyPath: 'body:c1:dates',
+        typedKeyPath: 'body:c1:dates',
+        fieldConfig: {
+          name: 'dates',
+          label: 'Dates',
+          widget: 'list',
+          field: { name: 'date', label: 'Date', widget: 'datetime', auto_now: true },
+        },
+        context: 'rich-text-editor-component',
+        valueStoreKey: 'extraValues',
+      },
+    });
+
     await expect.element(page.getByRole('textbox')).toBeVisible();
     await expect.element(page.getByRole('textbox')).not.toHaveAttribute('aria-readonly', 'true');
   });
@@ -695,6 +783,7 @@ describe('FieldEditor (nested in a duplicated field)', () => {
         typedKeyPath: 'caption',
         fieldConfig: { name: 'caption', widget: 'string', i18n: 'duplicate' },
         context: 'rich-text-editor-component',
+        valueStoreKey: 'extraValues',
       },
     });
 

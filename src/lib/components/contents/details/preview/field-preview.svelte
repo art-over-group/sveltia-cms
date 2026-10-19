@@ -1,4 +1,5 @@
 <script>
+  import ErrorBoundary from '$lib/components/common/error-boundary.svelte';
   import { CustomPreview, previews } from '$lib/components/contents/details/fields';
   import { customFieldTypeRegistry } from '$lib/services/api/registries';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
@@ -6,6 +7,7 @@
   import { highlightEditorField } from '$lib/services/contents/editor/fields';
   import { getFieldLocaleAccess } from '$lib/services/contents/editor/locale';
   import { getCurrentValue, isFieldMultiple } from '$lib/services/contents/entry/fields';
+  import { getFieldLabel } from '$lib/services/contents/i18n/options';
 
   /**
    * @import { InternalLocaleCode, TypedFieldKeyPath } from '$lib/types/private';
@@ -34,8 +36,9 @@
     /* eslint-enable prefer-const */
   } = $props();
 
-  const { name: fieldName, widget: fieldType = 'string' } = $derived(fieldConfig);
-  const { label = '', preview = true } = $derived(/** @type {VisibleField} */ (fieldConfig));
+  const { widget: fieldType = 'string' } = $derived(fieldConfig);
+  const { preview = true } = $derived(/** @type {VisibleField} */ (fieldConfig));
+  const fieldLabel = $derived(getFieldLabel({ config: fieldConfig, locale }));
   const multiple = $derived(isFieldMultiple(fieldConfig));
   const isList = $derived(fieldType === 'list' || multiple);
   const valueMap = $derived(getFieldValueMapSnapshot(entryDraft.current, locale, keyPath));
@@ -73,17 +76,19 @@
     }}
   >
     {#if showLabel}
-      <h4>{label || fieldName}</h4>
+      <h4>{fieldLabel}</h4>
     {/if}
-    {#if customFieldType?.preview}
-      <CustomPreview
-        {...{ ...previewProps, fieldConfig: /** @type {CustomField} */ (fieldConfig) }}
-        preview={customFieldType.preview}
-      />
-    {:else if fieldType in previews}
-      {@const Preview = previews[fieldType]}
-      <Preview {...previewProps} />
-    {/if}
+    <ErrorBoundary>
+      {#if customFieldType?.preview}
+        <CustomPreview
+          {...{ ...previewProps, fieldConfig: /** @type {CustomField} */ (fieldConfig) }}
+          preview={customFieldType.preview}
+        />
+      {:else if fieldType in previews}
+        {@const Preview = previews[fieldType]}
+        <Preview {...previewProps} />
+      {/if}
+    </ErrorBoundary>
   </section>
 {/if}
 
@@ -125,7 +130,8 @@
   }
 
   @media (width < 768px) {
-    :global([role='document']) {
+    /* A top-level field, which is wrapped for the Edit Pane to find it before it’s rendered */
+    :global([role='document'] > [data-lazy-key-path]) {
       & > section:is([data-field-type='file'], [data-field-type='image']):has(:global(img)),
       & > section:is([data-field-type='string']):has(:global(iframe)) {
         overflow: visible;

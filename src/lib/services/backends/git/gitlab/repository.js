@@ -1,8 +1,8 @@
 import { recordBranchAccess } from '$lib/services/backends/branch-access';
 import { fetchAPI, fetchGraphQL, graphqlVars } from '$lib/services/backends/git/shared/api';
 import {
-  createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createNoAccessError,
+  createNoWriteAccessError,
   toRepositoryAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
@@ -122,8 +122,12 @@ export const checkRepositoryAccess = async () => {
     throw toRepositoryAccessError(repository, status === 404 ? undefined : status);
   }
 
+  if (!permissions.found) {
+    throw createNoAccessError(repo);
+  }
+
   if (!permissions.canPush) {
-    throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', { repo });
+    throw createNoWriteAccessError(repo);
   }
 };
 

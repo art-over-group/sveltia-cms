@@ -1,4 +1,5 @@
 /**
+ * @import { ComponentType } from 'react';
  * @import { Component } from 'svelte';
  * @import {
  * BackendName,
@@ -90,7 +91,6 @@
  * @property {boolean} [closeWithEscape] Whether to close the entry editor by pressing the Escape
  * key.
  * @property {boolean} [underlineLinks] Whether to always underline links.
- * @property {boolean} [beta] Whether to enable beta features.
  * @property {boolean} [devModeEnabled] Whether to enable the developer mode.
  * @property {string} [deployHookURL] Webhook URL to manually trigger a new deployment on any
  * connected CI/CD provider.
@@ -958,7 +958,7 @@
  * @typedef {object} InternalSlugOptions
  * @property {string} template Slug template to fill for a new entry. It’s the configured template,
  * the legacy `{{fields._slug}}` tag when the slug is only given with the slug editor, or the
- * identifier field tag by default.
+ * identifier field tag by default. An empty string when the slug is numbered automatically.
  * @property {boolean} editorRequired Whether the template takes the slug from the slug editor, in
  * which case the slug editor must be filled in. Otherwise, a filled-in slug editor takes over from
  * the template.
@@ -969,6 +969,8 @@
  * entry is created, and once it has been saved.
  * @property {boolean} localized Whether each locale has a slug editor of its own, and every field
  * tag in the template is filled with the locale’s own value.
+ * @property {boolean} autoIncrement Whether a new entry’s slug is the number after the highest one
+ * among the entries of the collection, instead of a filled template.
  * @property {string} [hint] Short description shown with the slug editor.
  * @property {[string | RegExp, string]} [pattern] Validation format of the slug.
  */
@@ -1177,6 +1179,27 @@
  */
 
 /**
+ * Values of an Object field removed from an entry draft, in each locale they were removed from,
+ * keyed by their key path relative to the object’s, e.g. `.title` for `seo.title`, so they can be
+ * put back even if the object has moved since.
+ * @typedef {Record<InternalLocaleCode, Record<string, any>>} RemovedObjectValues
+ */
+
+/**
+ * Item removed from a List field with subfields, which is shown in its place with a button to
+ * restore it until the editor is closed.
+ * @typedef {object} RemovedListItem
+ * @property {string} id Unique ID, to key the item with.
+ * @property {number} index Position in the list the item is restored to: the index of the item
+ * it’s shown before, or the item count if it’s shown after every item.
+ * @property {Record<InternalLocaleCode, any>} values Item value in each locale it was removed
+ * from.
+ * @property {boolean} expanded Whether the item was expanded.
+ * @property {[suffix: string, state: boolean][]} nestedExpanderStates Expander states of the
+ * objects and lists nested in the item, as returned by `getNestedExpanderStates()`.
+ */
+
+/**
  * Entry draft.
  * @typedef {object} EntryDraft
  * @property {string} id Unique draft ID. For a new entry, it’s a randomly-generated UUID. For an
@@ -1186,6 +1209,7 @@
  * @property {boolean} isIndexFile Whether the corresponding entry is the collection’s special index
  * file used specifically in Hugo.
  * @property {boolean} canPreview Whether the entry draft can show the preview pane.
+ * @property {boolean} canShowSecondPane Whether the entry draft can show the second pane.
  * @property {string} collectionName Collection name, or `_singletons` for a singleton file.
  * @property {InternalCollection} collection Collection details, or pseudo-collection for a
  * singleton file.
@@ -1756,14 +1780,15 @@
  */
 
 /**
- * Entry/Asset list view type.
- * @typedef {'grid' | 'list'} ViewType
+ * Entry/Asset list view type. The `table` view is only available in the entry list.
+ * @typedef {'grid' | 'list' | 'table'} ViewType
  */
 
 /**
  * Entry list view settings.
  * @typedef {object} EntryListView
- * @property {ViewType} type View type.
+ * @property {ViewType} [type] View type the user has picked. Not set until then, so the default
+ * applies.
  * @property {SortingConditions} [sort] Sorting conditions.
  * @property {FilteringConditions} [filter] Filtering conditions. Deprecated in favour of `filters`.
  * @property {FilteringConditions[]} [filters] One or more filtering conditions.
@@ -1780,6 +1805,15 @@
  * @property {InternalLocaleCode} locale Locale.
  * @property {number} [width] Percentage width of the pane in the editor layout. The sum of the
  * widths of all panes should be 100.
+ */
+
+/**
+ * Column of the entry list’s table view, resolved from the `table_columns` collection option.
+ * @typedef {object} EntryTableColumn
+ * @property {string} key Field key path, or one of the special keys: `_summary`, `slug`,
+ * `commit_author` and `commit_date`.
+ * @property {string} label Column header.
+ * @property {Field} [fieldConfig] Field configuration, if the key is a field key path.
  */
 
 /**
@@ -1823,6 +1857,18 @@
  * @property {string} extension File extension.
  * @property {FileParser} [parser] Parser method.
  * @property {FileFormatter} [formatter] Formatter method.
+ */
+
+/**
+ * Custom page registered with the `CMS.registerCustomPage()` API, normalized for the UI.
+ * @typedef {object} CustomPage
+ * @property {string} id Page ID, used in the page’s URL path.
+ * @property {string} label Page label.
+ * @property {string} icon Material Symbols icon name.
+ * @property {ComponentType} [component] React component rendering the page content.
+ * @property {string} [url] Absolute URL of the web page to show, embedded in an iframe unless
+ * `newTab` is `true`.
+ * @property {boolean} newTab Whether the page is a link opening `url` in a new browser tab.
  */
 
 /**
@@ -2155,6 +2201,8 @@
  * @property {Set<string>} warnings Collected warning messages.
  * @property {Set<CollectedMediaField>} mediaFields Collected media fields.
  * @property {Set<CollectedRelationField>} relationFields Collected relation fields.
+ * @property {Set<string>} formatLocales Locale codes DateTime fields write their values in with the
+ * `localize_format` option, whose Day.js locales are loaded before the content is.
  */
 
 /**
@@ -2187,6 +2235,14 @@
  */
 
 /**
+ * Relation field options generated from a referenced entry, which can be more than one if the
+ * templates refer to a List subfield.
+ * @typedef {object} RelationOptionGroup
+ * @property {Entry} refEntry Referenced entry.
+ * @property {RelationOption[]} options Options generated from the entry.
+ */
+
+/**
  * Arguments for a field parser function.
  * @typedef {object} FieldParserArgs
  * @property {Field} config Field configuration.
@@ -2214,7 +2270,10 @@
  * Parsed transformation descriptor used by template placeholders and summary rendering.
  * @typedef {object} StringTransformation
  * @property {string} method The transformation name.
- * @property {Record<string, string>} args Transformation arguments.
+ * @property {Record<string, string>} args Named arguments of a built-in transformation.
+ * @property {readonly (string | number)[]} [customArgs] Arguments of a transformation that isn’t
+ * built-in, which may be a custom one registered with `CMS.registerStringTransformation()`. Only
+ * present if the arguments are given in parentheses and can be parsed.
  */
 
 export {};

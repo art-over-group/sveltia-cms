@@ -1,15 +1,21 @@
 import { toRaw } from '@sveltia/utils/object';
 
 import { suspendAutoDuplication } from '$lib/services/contents/draft';
-import { createProxy, isDuplicatedField } from '$lib/services/contents/draft/create/proxy.svelte';
+import {
+  createProxy,
+  getListItemMatcher,
+  isDuplicatedField,
+} from '$lib/services/contents/draft/create/proxy.svelte';
 import { getDefaultValues } from '$lib/services/contents/draft/defaults';
-import { getField } from '$lib/services/contents/entry/fields';
+import { getDraftFieldArgs, getField } from '$lib/services/contents/entry/fields';
 import { isKeyPathWithin } from '$lib/services/contents/entry/key-paths';
 import { TEXT_FIELD_TYPES } from '$lib/services/contents/fields';
 import { hasUuidTag } from '$lib/services/contents/fields/compute/helpers';
+import { getLocalizedDateTimeValue } from '$lib/services/contents/fields/date-time/value';
 import { getDuplicateKeysFieldKeyPaths } from '$lib/services/contents/fields/key-value/duplicate-keys';
 import { getPairsFromContent, setPairs } from '$lib/services/contents/fields/key-value/pairs';
 import { getInitialValue as getInitialUuidValue } from '$lib/services/contents/fields/uuid/helpers';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
 import {
   isFieldI18nDisabled,
   isFieldLocalized,
@@ -45,41 +51,34 @@ import {
  * to run for each target locale, taking that locale’s content and the locale code.
  */
 export const forEachTargetLocale = ({ valueStore, locale, i18n, draft, keyPath }, callback) => {
-  /**
-   * Check if the field is nested in a duplicated List or Object field.
-   * @param {EntryDraft} _draft Entry draft.
-   * @param {FieldKeyPath} _keyPath Key path of the field.
-   * @returns {boolean} Result.
-   */
-  const isNestedInDuplicatedField = (_draft, _keyPath) => {
-    const getFieldArgs = {
-      collectionName: _draft.collectionName,
-      fileName: _draft.fileName,
-      isIndexFile: _draft.isIndexFile,
-      keyPath: _keyPath,
-      valueMap: valueStore?.[locale],
-    };
+  // The field configuration can only be looked up for the entry’s own values, not for those of a
+  // rich text editor component, which live in another value store
+  const getFieldArgs =
+    draft && keyPath && valueStore === draft.currentValues
+      ? getDraftFieldArgs(draft, { keyPath, valueMap: valueStore[locale] })
+      : undefined;
 
-    // Look up the configuration rather than relying on the given `i18n`, which the caller may have
-    // defaulted to `false` for a field without the option, which would hide the ancestor’s strategy
-    return isDuplicatedField({
-      fieldConfig: getField(getFieldArgs) ?? /** @type {Field} */ ({ i18n }),
-      getFieldArgs,
-    });
-  };
+  // Resolve the field before any callback changes the values it’s resolved from. Look up the
+  // configuration rather than relying on the given `i18n`, which the caller may have defaulted to
+  // `false` for a field without the option, which would hide the ancestor’s strategy
+  const fieldConfig = getFieldArgs ? getField(getFieldArgs) : undefined;
 
   const duplicated =
     i18n === 'duplicate' ||
-    // The field configuration can only be looked up for the entry’s own values, not for those of a
-    // rich text editor component, which live in another value store
-    (!!draft &&
-      !!keyPath &&
-      valueStore === draft.currentValues &&
-      isNestedInDuplicatedField(draft, keyPath));
+    (!!getFieldArgs &&
+      isDuplicatedField({
+        fieldConfig: fieldConfig ?? /** @type {Field} */ ({ i18n }),
+        getFieldArgs,
+      }));
+
+  // A field in an item of a translatable List field is only written to the locales that have the
+  // same item
+  const matchesListItems =
+    duplicated && getFieldArgs ? getListItemMatcher({ fieldConfig, getFieldArgs }) : () => true;
 
   suspendAutoDuplication(() => {
     Object.entries(valueStore ?? {}).forEach(([_locale, valueMap]) => {
-      if (_locale === locale || duplicated) {
+      if (_locale === locale || (duplicated && matchesListItems(valueMap))) {
         callback(valueMap, _locale);
       }
     });
@@ -100,14 +99,12 @@ export const forEachTargetLocale = ({ valueStore, locale, i18n, draft, keyPath }
  * @returns {FlattenedEntryContent} Updated content.
  */
 export const copyDefaultLocaleValues = ({ draft, content, targetLanguage, keyPathPrefix }) => {
-  const { collectionName, fileName, collection, collectionFile, currentValues, isIndexFile } =
-    draft;
-
-  const { defaultLocale } = (collectionFile ?? collection)._i18n;
+  const { currentValues } = draft;
+  const { defaultLocale } = getDraftI18nConfig(draft);
   /** @type {FlattenedEntryContent} */
   const defaultLocaleContent = toRaw(currentValues[defaultLocale]);
   const newContent = { ...toRaw(content), ...defaultLocaleContent };
-  const getFieldArgs = { collectionName, fileName, valueMap: newContent, isIndexFile };
+  const getFieldArgs = getDraftFieldArgs(draft, { valueMap: newContent });
   /** @type {string[]} */
   const noI18nFieldKeys = [];
 
@@ -131,8 +128,13 @@ export const copyDefaultLocaleValues = ({ draft, content, targetLanguage, keyPat
 
     // Reset the field value to the default value or an empty string if the field is a text-like
     // field type and i18n is enabled, because the content would likely be translated by the user.
-    // Otherwise, the content would be copied from the default locale.
-    if (TEXT_FIELD_TYPES.includes(fieldType) && isFieldTranslatable(i18n)) {
+    // Otherwise, the content would be copied from the default locale. A `duplicate_if_empty` field
+    // keeps the default locale’s value until the user enters one of their own
+    if (
+      TEXT_FIELD_TYPES.includes(fieldType) &&
+      isFieldTranslatable(i18n) &&
+      i18n !== 'duplicate_if_empty'
+    ) {
       newContent[keyPath] = content[keyPath] ?? '';
     }
 
@@ -158,6 +160,17 @@ export const copyDefaultLocaleValues = ({ draft, content, targetLanguage, keyPat
       if (defaultValue === '{{locale}}') {
         newContent[keyPath] = targetLanguage;
       }
+    }
+
+    // A DateTime field value copied from the default locale may be written in its language with the
+    // `localize_format` option, so write it in the target locale’s
+    if (fieldType === 'datetime' && keyPath in defaultLocaleContent) {
+      newContent[keyPath] = getLocalizedDateTimeValue({
+        fieldConfig: field,
+        value: newContent[keyPath],
+        sourceLocale: defaultLocale,
+        targetLocale: targetLanguage,
+      });
     }
 
     // Remove `null` values for object fields if i18n is enabled and the field is enabled in the

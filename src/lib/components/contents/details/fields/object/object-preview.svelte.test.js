@@ -56,6 +56,8 @@ describe('ObjectPreview', () => {
 
     expect(sections).toHaveLength(2);
     expect(sections[0]).toHaveAttribute('data-key-path', 'author.name');
+    // Each subfield is marked outside its lazily rendered preview, for the Edit Pane to scroll to
+    expect(sections[1].parentElement).toHaveAttribute('data-lazy-key-path', 'author.email');
     expect(sections[0]).toHaveTextContent('name Melvin Lucas');
     expect(sections[1].querySelector('a')).toHaveAttribute('href', 'mailto:melvin@example.com');
     // No type label
@@ -94,6 +96,17 @@ describe('ObjectPreview', () => {
       'data-typed-key-path',
       'block<hero>.heading',
     );
+  });
+
+  test('labels the type in the UI locale without a content locale', async () => {
+    /** @type {ObjectField} */
+    const fieldConfig = {
+      ...blockField,
+      types: [{ ...blockField.types[0], label_localized: { en: 'Banner' } }, blockField.types[1]],
+    };
+
+    await renderPreview(fieldConfig, { 'block.type': 'hero', 'block.heading': 'Welcome' });
+    await expect.element(page.getByRole('group', { name: 'Banner' })).toBeVisible();
   });
 
   test('falls back to the type name as the label', async () => {

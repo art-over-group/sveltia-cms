@@ -3,11 +3,10 @@
   Implement the editor for a DateTime field.
   @see https://decapcms.org/docs/widgets/#Datetime
   @see https://sveltiacms.app/en/docs/fields/datetime
-  @todo Replace the native `<input>` with a custom component.
 -->
 <script>
   import { _ } from '@sveltia/i18n';
-  import { Button } from '@sveltia/ui';
+  import { Button, DateTimeInput } from '@sveltia/ui';
 
   import DateTimePreview from '$lib/components/contents/details/fields/date-time/date-time-preview.svelte';
   import { isAutoNowField } from '$lib/services/contents/fields/date-time/auto-now';
@@ -77,7 +76,7 @@
       return;
     }
 
-    const _inputValue = getInputValue({ currentValue, fieldConfig, timeZone });
+    const _inputValue = getInputValue({ currentValue, fieldConfig, timeZone, locale });
 
     // Avoid a cycle dependency & infinite loop
     if (_inputValue !== undefined && _inputValue !== inputValue) {
@@ -100,10 +99,10 @@
     // value it had when it was focused would be ignored
     syncedInputValue = inputValue;
 
-    const newValue = getCurrentValue({ inputValue, currentValue, fieldConfig, timeZone });
+    const newValue = getCurrentValue({ inputValue, currentValue, fieldConfig, timeZone, locale });
 
     // Avoid a cycle dependency & infinite loop
-    if (shouldUpdateValue({ newValue, currentValue, fieldConfig })) {
+    if (shouldUpdateValue({ newValue, currentValue, fieldConfig, locale })) {
       currentValue = /** @type {string} */ (newValue);
     }
   };
@@ -147,13 +146,15 @@
   <DateTimePreview {locale} {keyPath} {typedKeyPath} {fieldConfig} {currentValue} />
 {:else}
   <div role="none">
-    <input
-      {...{ type, min, max, step }}
+    <DateTimeInput
+      {type}
+      {min}
+      {max}
+      {step}
       bind:value={inputValue}
       {readonly}
-      aria-readonly={readonly}
-      aria-required={required}
-      aria-invalid={invalid}
+      {required}
+      {invalid}
       aria-labelledby="{fieldId}-label"
       aria-errormessage="{fieldId}-error"
       onfocus={handleFocus}
@@ -182,7 +183,7 @@
 
   {#if singleCustomTimeZone}
     <div role="none" class="timezone">
-      {getTimeZoneLabel(singleCustomTimeZone, getDate(currentValue, fieldConfig))}
+      {getTimeZoneLabel(singleCustomTimeZone, getDate(currentValue, fieldConfig, locale))}
     </div>
   {:else if utc}
     <div role="none" class="timezone">UTC</div>

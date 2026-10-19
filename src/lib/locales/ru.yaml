@@ -1657,7 +1657,7 @@ config:
     oauth_implicit_flow: Настроенный метод аутентификации (implicit flow) не поддерживается в Sveltia CMS. Используйте другой <a>метод аутентификации</a>.
     github_pkce_unsupported: Авторизация PKCE пока не поддерживается из-за ограничений GitHub. Используйте другой <a>метод аутентификации</a>.
     oauth_no_app_id: Идентификатор OAuth-приложения не определён.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: Параметр `open_authoring` требует режима публикации `editorial_workflow`. Подробности см. в <a>документации</a>.
     # Don’t localize `auth_methods`
     no_auth_methods: Параметр `auth_methods` должен содержать хотя бы один метод.
@@ -2086,26 +2086,8 @@ prefs:
       description: Показывать подчёркивание ссылок в предпросмотре записи и в надписях интерфейса.
       switch_label: Всегда подчёркивать ссылки
 
-  # Advanced panel
-  advanced:
-    title: Дополнительно
-    beta:
-      title: Бета-функции
-      description: Включить некоторые бета-функции, которые могут быть нестабильными или непереведёнными.
-      switch_label: Присоединиться к бета-программе
-    deploy_hook:
-      title: Хук развёртывания
-      description: Введите URL веб-хука, который будет вызываться, когда вы вручную запускаете развёртывание, выбирая «Опубликовать изменения». Это можно оставить пустым, если вы используете GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: URL хука
-        saved: URL хука сохранён.
-        removed: URL хука удалён.
-      # Authorization header input
-      auth:
-        field_label: Заголовок авторизации (напр., Bearer <token>) (необязательно)
-        saved: Заголовок авторизации сохранён.
-        removed: Заголовок авторизации удалён.
+  # Data Management panel
+  data:
     clear_data:
       title: Очистить данные
       # Clear File Cache button
@@ -2125,6 +2107,19 @@ prefs:
       title: Режим разработчика
       description: Включить некоторые функции для разработчиков, включая подробные журналы консоли и собственные контекстные меню.
       switch_label: Включить режим разработчика
+    deploy_hook:
+      title: Хук развёртывания
+      description: Введите URL веб-хука, который будет вызываться, когда вы вручную запускаете развёртывание, выбирая «Опубликовать изменения». Это можно оставить пустым, если вы используете GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: URL хука
+        saved: URL хука сохранён.
+        removed: URL хука удалён.
+      # Authorization header input
+      auth:
+        field_label: Заголовок авторизации (напр., Bearer <token>) (необязательно)
+        saved: Заголовок авторизации сохранён.
+        removed: Заголовок авторизации удалён.
 
 # ==============================================================================
 # Keyboard Shortcuts

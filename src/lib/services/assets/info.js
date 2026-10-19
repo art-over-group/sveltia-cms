@@ -2,7 +2,7 @@ import { escapeRegExp } from '@sveltia/utils/string';
 import mime from 'mime';
 
 import { getAssetFoldersByPath, globalAssetFolder } from '$lib/services/assets/folders';
-import { canCreateThumbnail, hasPDFThumbnail } from '$lib/services/assets/kinds';
+import { canCreateThumbnail, isPDF } from '$lib/services/assets/kinds';
 import { allAssets } from '$lib/services/assets/state';
 import { backend } from '$lib/services/backends';
 import {
@@ -313,15 +313,14 @@ const limitThumbnailGeneration = createConcurrencyLimiter(4);
  * Get a thumbnail blob for the given asset, generating it from the original file if it’s not in the
  * cache database yet.
  * @param {Asset} asset Asset.
- * @param {boolean} isPDF Whether the asset is a PDF file.
  * @returns {Promise<Blob | undefined>} Thumbnail blob.
  */
-const resolveThumbnailBlob = async (asset, isPDF) => {
+const resolveThumbnailBlob = async (asset) => {
   /** @type {Blob | undefined} */
   let thumbnailBlob = await thumbnailDB?.get(asset.sha);
 
   if (!thumbnailBlob) {
-    const transform = isPDF ? renderPDF : transformImage;
+    const transform = isPDF(asset.name) ? renderPDF : transformImage;
 
     thumbnailBlob = await limitThumbnailGeneration(async () =>
       transform(await getThumbnailSourceBlob(asset), THUMBNAIL_TRANSFORM_OPTIONS),
@@ -366,8 +365,6 @@ export const getAssetThumbnailURL = async (asset, { cacheOnly = false } = {}) =>
     return undefined;
   }
 
-  const isPDF = hasPDFThumbnail(asset.name);
-
   initThumbnailDB();
 
   const { sha } = asset;
@@ -382,7 +379,7 @@ export const getAssetThumbnailURL = async (asset, { cacheOnly = false } = {}) =>
   // A `cacheOnly` caller joins an in-flight resolution rather than reading the database again: the
   // work is already happening, so waiting for it costs nothing extra
   const thumbnailBlob = await shareInFlight(pendingThumbnailBlobs, sha, () =>
-    resolveThumbnailBlob(asset, isPDF),
+    resolveThumbnailBlob(asset),
   );
 
   return thumbnailBlob ? URL.createObjectURL(thumbnailBlob) : undefined;
@@ -393,6 +390,22 @@ export const getAssetThumbnailURL = async (asset, { cacheOnly = false } = {}) =>
  * @type {Set<string>}
  */
 const pendingRevocations = new Set();
+/**
+ * Blob URLs of the assets preloaded with {@link preloadAssets}, which a revocation leaves alone
+ * until they’re no longer preloaded, although no element displays them yet.
+ * @type {Set<string>}
+ */
+const preloadedURLs = new Set();
+/**
+ * Assets most recently passed to {@link preloadAssets}, including the ones to keep.
+ * @type {Asset[]}
+ */
+let preloadedAssets = [];
+/**
+ * Assets most recently passed to {@link preloadAssets} to be loaded, excluding the ones to keep.
+ * @type {Asset[]}
+ */
+let loadedAssets = [];
 
 /* v8 ignore next */
 /**
@@ -401,6 +414,9 @@ const pendingRevocations = new Set();
  */
 export const _resetRevocationQueue = () => {
   pendingRevocations.clear();
+  preloadedURLs.clear();
+  preloadedAssets = [];
+  loadedAssets = [];
 };
 
 /**
@@ -414,6 +430,10 @@ const flushRevocations = () => {
   // One query for every blob URL on the page, rather than one per asset
   document.querySelectorAll('[src^="blob:"]').forEach((element) => {
     urls.delete(/** @type {string} */ (element.getAttribute('src')));
+  });
+
+  preloadedURLs.forEach((url) => {
+    urls.delete(url);
   });
 
   if (!urls.size) {
@@ -669,4 +689,68 @@ export const getFolderPublicPath = ({ folder, subfolderPath }) => {
   const path = (subfolderPath ? `${basePath}/${subfolderPath}` : basePath) || '/';
 
   return encodingEnabled ? encodeFilePath(path) : path;
+};
+
+/**
+ * Load the given assets ahead of time, so they can be shown at once when the user moves to them,
+ * e.g. the assets right before and after the one shown in the details overlay. An image is decoded
+ * as well, and an asset already passed to the previous call isn’t loaded again. The assets passed
+ * to the previous call that aren’t passed again are released: their
+ * blob URLs are revoked unless an element displays them. Pass an empty array to release them all.
+ * @param {Asset[]} assets Assets to preload.
+ * @param {object} [options] Options.
+ * @param {Asset[]} [options.keep] Assets that are being loaded elsewhere, e.g. the one shown in the
+ * overlay, whose blob URLs are kept like those of the preloaded assets but which aren’t loaded
+ * here. This keeps a preloaded asset the user has just moved to from being released before its
+ * preview displays it.
+ */
+export const preloadAssets = (assets, { keep = [] } = {}) => {
+  const retained = [...assets, ...keep];
+  const released = preloadedAssets.filter((asset) => !retained.includes(asset));
+  const added = assets.filter((asset) => !loadedAssets.includes(asset));
+
+  preloadedAssets = retained;
+  loadedAssets = assets;
+
+  keep.forEach((asset) => {
+    if (asset.blobURL) {
+      preloadedURLs.add(asset.blobURL);
+    }
+  });
+
+  released.forEach((asset) => {
+    if (asset.blobURL) {
+      preloadedURLs.delete(asset.blobURL);
+    }
+
+    revokeAssetBlobURLIfNeeded(asset);
+  });
+
+  added.forEach(async (asset) => {
+    try {
+      const url = await getAssetBlobURL(asset);
+
+      if (!url) {
+        return;
+      }
+
+      // The asset may have been released while its blob was being read
+      if (!preloadedAssets.includes(asset)) {
+        revokeAssetBlobURLIfNeeded(asset);
+
+        return;
+      }
+
+      preloadedURLs.add(url);
+
+      if (asset.kind === 'image') {
+        const image = new Image();
+
+        image.src = url;
+        await image.decode();
+      }
+    } catch {
+      // The preview will try again and show the error, if any, once the asset is shown
+    }
+  });
 };

@@ -1,5 +1,3 @@
-import { isURL } from '@sveltia/utils/string';
-
 import { customComponentRegistry } from '$lib/services/api/registries';
 import { warnDeprecation } from '$lib/services/config/deprecations';
 import { parseBackendConfig } from '$lib/services/config/parser/backend';
@@ -9,9 +7,10 @@ import { parseFields } from '$lib/services/config/parser/fields';
 import { parseI18nConfig } from '$lib/services/config/parser/i18n';
 import { parseMediaConfig } from '$lib/services/config/parser/media';
 import { parseMediaLibraries } from '$lib/services/config/parser/media-libraries';
+import { parsePublishMode } from '$lib/services/config/parser/publish-mode';
 import { parseSlugConfig } from '$lib/services/config/parser/slug';
 import { addMessage, checkUnsupportedOptions } from '$lib/services/config/parser/utils/validator';
-import { isNonEmptyString } from '$lib/services/utils/string';
+import { isHttpURL, isNonEmptyString } from '$lib/services/utils/string';
 
 /**
  * @import { CmsConfig } from '$lib/types/public';
@@ -57,7 +56,7 @@ export const parseCmsConfig = (cmsConfig, collectors) => {
 
     // An empty string is as good as none, and a value of another type is reported against the
     // JSON schema
-    if (isNonEmptyString(url) && !isURL(url.trim())) {
+    if (isNonEmptyString(url) && !isHttpURL(url)) {
       addMessage({
         strKey: 'invalid_url_option',
         values: { option, url },
@@ -72,6 +71,7 @@ export const parseCmsConfig = (cmsConfig, collectors) => {
     warnDeprecation('logo_url');
   }
 
+  parsePublishMode({ value: cmsConfig.publish_mode, context: { cmsConfig }, collectors });
   parseMediaConfig(cmsConfig, collectors);
   parseMediaLibraries({ config: cmsConfig, context: { cmsConfig }, collectors });
   parseSlugConfig(cmsConfig, collectors);

@@ -281,7 +281,9 @@ test.describe('Hidden field', () => {
   });
 
   test.beforeEach(async ({ cms, github, page }) => {
-    await page.clock.install({ time: new Date('2026-09-28T12:34:56.789Z') });
+    // Pin the time rather than install a clock that keeps running: signing in takes long enough to
+    // pass the minute, which `{{datetime}}` would then show
+    await page.clock.setFixedTime(new Date('2026-09-28T12:34:56.789Z'));
     github.commit({
       [SAVED]: [
         'title: Saved',
@@ -359,7 +361,7 @@ test.describe('Hidden field', () => {
   test('fills in the defaults again for a duplicate', async ({ cms, github, page }) => {
     const editor = await openNote(page, 'Saved');
 
-    await page.clock.setSystemTime(new Date('2026-10-01T08:00:00Z'));
+    await page.clock.setFixedTime(new Date('2026-10-01T08:00:00Z'));
     await duplicate(cms, page);
     await editor.getByRole('textbox', { name: 'Title' }).fill('Copy');
     await editor.getByRole('button', { name: 'Save' }).click();
@@ -558,6 +560,42 @@ test.describe('Compute field', () => {
     await expect
       .poll(async () => (await cms.readRepo())['content/notes/copy.yml'])
       .toMatch(/^permalink: \/notes\/copy-(?!0123456789ab)[0-9a-f]{12}$/m);
+  });
+});
+
+test.describe('Compute field with a template tag in a transformation argument', () => {
+  test.use({
+    config: config([
+      { name: 'nickname', label: 'Nickname', required: false },
+      {
+        name: 'display',
+        label: 'Display Name',
+        widget: 'compute',
+        value: "{{fields.nickname | default('{{fields.title | upper}} #{{fields.number}}')}}",
+      },
+      { name: 'number', label: 'Number', widget: 'number', value_type: 'int' },
+    ]),
+  });
+
+  test.beforeEach(async ({ cms }) => {
+    await cms.open();
+    await cms.signIn();
+  });
+
+  test('resolves the tag in the argument like the tag itself', async ({ cms, page }) => {
+    const editor = await createNote(page, 'Hello World');
+    const preview = editor.getByRole('document', { name: 'Content Preview' });
+
+    await editor.getByRole('spinbutton', { name: 'Number' }).fill('1200');
+    await expect(preview.getByText('HELLO WORLD #1200')).toBeVisible();
+    await editor.getByRole('textbox', { name: 'Nickname' }).fill('Hi');
+    await expect(preview.getByText('HELLO WORLD #1200')).toBeHidden();
+    await editor.getByRole('textbox', { name: 'Nickname' }).fill('');
+    await editor.getByRole('button', { name: 'Save' }).click();
+
+    await expect
+      .poll(async () => (await cms.readRepo())['content/notes/hello-world.yml'])
+      .toBe("title: Hello World\nnickname: ''\ndisplay: 'HELLO WORLD #1200'\nnumber: 1200\n");
   });
 });
 

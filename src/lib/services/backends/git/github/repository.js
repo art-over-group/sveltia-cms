@@ -1,8 +1,8 @@
 import { recordBranchAccess } from '$lib/services/backends/branch-access';
 import { fetchAPI, fetchGraphQL, graphqlVars } from '$lib/services/backends/git/shared/api';
 import {
-  createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createNoAccessError,
+  createNoWriteAccessError,
   toRepositoryAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
@@ -75,12 +75,14 @@ export const checkRepositoryAccess = async () => {
     );
   }
 
-  const { permissions } = /** @type {{ permissions?: { push?: boolean } }} */ (
+  const { permissions } = /** @type {{ permissions?: { pull?: boolean, push?: boolean } }} */ (
     await response.json()
   );
 
   if (!permissions?.push) {
-    throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', { repo });
+    // A read or triage collaborator can read the repository, but a response without the user’s
+    // permissions doesn’t say they can
+    throw permissions?.pull ? createNoWriteAccessError(repo) : createNoAccessError(repo);
   }
 };
 

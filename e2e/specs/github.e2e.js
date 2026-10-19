@@ -1,5 +1,5 @@
 import { expect, GITHUB_CONFIG, test } from '../fixtures/test.js';
-import { openFirstPost } from '../fixtures/ui.js';
+import { getEntryRows, openFirstPost } from '../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -53,13 +53,13 @@ test.describe('with the commit date as a sortable field', () => {
     github.pathsWithoutHistory.add('content/posts/second-post.md');
 
     await cms.open();
-    await expect(page.getByRole('row')).toHaveCount(3);
+    await expect(getEntryRows(page)).toHaveCount(3);
     // The commit metadata is fetched after the entries are listed
     await cms.chooseMenuItem(
       page.getByRole('button', { name: 'Sort', exact: true }),
       page.getByRole('menuitemradio', { name: /Updated on.*new to old/ }),
     );
-    await expect(page.getByRole('row')).toHaveText([/Third Post/, /First Post/, /Second Post/]);
+    await expect(getEntryRows(page)).toHaveText([/Third Post/, /First Post/, /Second Post/]);
   });
 });
 
@@ -73,12 +73,12 @@ test('offers to sort by the commit date and author with the default sortable fie
   github.commit({ 'content/posts/third-post.md': '---\ntitle: Third Post\n---\n' });
 
   await cms.open();
-  await expect(page.getByRole('row')).toHaveCount(3);
+  await expect(getEntryRows(page)).toHaveCount(3);
   await cms.chooseMenuItem(
     page.getByRole('button', { name: 'Sort', exact: true }),
     page.getByRole('menuitemradio', { name: /Updated on.*new to old/ }),
   );
-  await expect(page.getByRole('row')).toHaveText([/Third Post/, /Second Post/, /First Post/]);
+  await expect(getEntryRows(page)).toHaveText([/Third Post/, /Second Post/, /First Post/]);
   await page.getByRole('button', { name: 'Sort', exact: true }).click();
   await expect(page.getByRole('menuitemradio', { name: /Updated by/ }).first()).toBeVisible();
 });
@@ -121,6 +121,15 @@ test('tells the user about an incident on GitHub until it’s over', async ({
 
 test('refuses a user who can only read the repository', async ({ cms, github, page }) => {
   github.canWrite = false;
+
+  await cms.open();
+  await expect(page.getByRole('alert')).toContainText(
+    /You don’t have write access to the .*e2e-site.* repository/,
+  );
+});
+
+test('refuses a user who can’t see the repository', async ({ cms, github, page }) => {
+  github.canRead = false;
 
   await cms.open();
   await expect(page.getByRole('alert')).toContainText(

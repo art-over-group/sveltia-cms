@@ -14,7 +14,7 @@
 
   import { waitForAssetURL } from '$lib/services/api/asset-proxy';
   import { createGetAsset } from '$lib/services/api/preview-data';
-  import { getReactDom, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
+  import { createReactRoot, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
   import { getRichTextMediaURL } from '$lib/services/assets/media-field';
   import { cmsConfig } from '$lib/services/config';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
@@ -36,6 +36,7 @@
     MEDIA_QUERY_SELECTOR,
     resolveMediaURLs,
   } from '$lib/services/contents/fields/rich-text/previews/media-urls';
+  import { removeScriptURLs } from '$lib/services/contents/fields/rich-text/previews/script-urls';
   import { sanitizeRichTextHTML } from '$lib/services/contents/fields/rich-text/sanitize';
 
   /**
@@ -72,7 +73,7 @@
   });
 
   const defaultConfig = cmsConfig.current?.field_defaults?.richtext ?? {};
-  /** @type {SvelteMap<HTMLElement, import('react-dom/client').Root>} */
+  /** @type {SvelteMap<HTMLElement, ReturnType<typeof createReactRoot>>} */
   const reactRoots = new SvelteMap();
   /**
    * DOM element previews currently inserted in the preview pane. Used to notify each element with
@@ -235,7 +236,7 @@
    * @param {ReactElement} preview React element to be rendered.
    */
   const mountReactPreview = (element, preview) => {
-    const root = getReactDom().createRoot(element);
+    const root = createReactRoot(element);
 
     reactRoots.set(element, root);
     root.render(preview);
@@ -441,8 +442,9 @@
 
   /**
    * Parse a block of markdown into HTML, replacing component placeholders with their previews and
-   * sanitizing the result if needed. An HTML value is only sanitized. The media URLs are deferred,
-   * so the browser doesn’t request a file path before `replaceMediaURLs()` resolves it.
+   * sanitizing the result if needed, or else removing `javascript:` URLs, which could come from a
+   * new entry’s body given in the URL. An HTML value is only sanitized. The media URLs are
+   * deferred, so the browser doesn’t request a file path before `replaceMediaURLs()` resolves it.
    * @param {string} block The markdown block to parse, or the whole HTML value.
    * @returns {string} The parsed (and possibly sanitized) HTML string.
    */
@@ -452,7 +454,7 @@
 
     const rawHTML = isHTML ? block : /** @type {string} */ (parse(block, { breaks: true }));
 
-    return deferMediaURLs(doSanitize ? sanitizeRichTextHTML(rawHTML) : rawHTML);
+    return deferMediaURLs(doSanitize ? sanitizeRichTextHTML(rawHTML) : removeScriptURLs(rawHTML));
   };
 
   $effect(() => {

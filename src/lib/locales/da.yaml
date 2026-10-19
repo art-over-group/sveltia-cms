@@ -1565,7 +1565,7 @@ config:
     oauth_implicit_flow: Den konfigurerede autentificeringsmetode (implicit flow) understøttes ikke i Sveltia CMS. Brug en anden <a>autentificeringsmetode</a> i stedet.
     github_pkce_unsupported: PKCE-autorisation understøttes endnu ikke på grund af begrænsninger hos GitHub. Brug en anden <a>autentificeringsmetode</a> i stedet.
     oauth_no_app_id: OAuth-applikationens id er ikke defineret.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: Indstillingen `open_authoring` kræver udgivelsestilstanden `editorial_workflow`. Se <a>dokumentationen</a> for detaljer.
     # Don’t localize `auth_methods`
     no_auth_methods: Indstillingen `auth_methods` skal indeholde mindst én metode.
@@ -1979,26 +1979,8 @@ prefs:
       description: Vis understregning af links i forhåndsvisningen af dokumenter og i brugerfladens tekster.
       switch_label: Understreg altid links
 
-  # Advanced panel
-  advanced:
-    title: Avanceret
-    beta:
-      title: Betafunktioner
-      description: Slå betafunktioner til. De kan være ustabile eller mangle oversættelse.
-      switch_label: Deltag i betaprogrammet
-    deploy_hook:
-      title: Deploy-hook
-      description: Indtast en webhook-URL der skal kaldes når du manuelt udløser en udrulning ved at vælge Udgiv ændringer. Feltet kan stå tomt hvis du bruger GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: Hook-URL
-        saved: Hook-URL’en er gemt.
-        removed: Hook-URL’en er fjernet.
-      # Authorization header input
-      auth:
-        field_label: Authorization-header (fx Bearer <token>) (valgfri)
-        saved: Authorization-headeren er gemt.
-        removed: Authorization-headeren er fjernet.
+  # Data Management panel
+  data:
     clear_data:
       title: Ryd data
       # Clear File Cache button
@@ -2018,6 +2000,19 @@ prefs:
       title: Udviklertilstand
       description: Slå udviklerorienterede funktioner til, herunder detaljerede konsollogs og systemets egne kontekstmenuer.
       switch_label: Slå udviklertilstand til
+    deploy_hook:
+      title: Deploy-hook
+      description: Indtast en webhook-URL der skal kaldes når du manuelt udløser en udrulning ved at vælge Udgiv ændringer. Feltet kan stå tomt hvis du bruger GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: Hook-URL
+        saved: Hook-URL’en er gemt.
+        removed: Hook-URL’en er fjernet.
+      # Authorization header input
+      auth:
+        field_label: Authorization-header (fx Bearer <token>) (valgfri)
+        saved: Authorization-headeren er gemt.
+        removed: Authorization-headeren er fjernet.
 
 # ==============================================================================
 # Keyboard Shortcuts

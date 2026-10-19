@@ -60,6 +60,16 @@ describe('ListPreviewComplex', () => {
       'data-typed-key-path',
       'authors.*.name',
     );
+    // Each item and subfield is marked outside its lazily rendered content, for the Edit Pane to
+    // scroll to it
+    expect(groups[1].closest('[data-lazy-key-path]')).toHaveAttribute(
+      'data-lazy-key-path',
+      'authors.1',
+    );
+    expect(groups[1].querySelector('section')?.parentElement).toHaveAttribute(
+      'data-lazy-key-path',
+      'authors.1.name',
+    );
   });
 
   test('previews a single subfield stored as the item itself', async () => {
@@ -72,6 +82,8 @@ describe('ListPreviewComplex', () => {
 
     expect(sections).toHaveLength(2);
     expect(sections[0]).toHaveAttribute('data-key-path', 'links.0');
+    // The subfield’s wrapper has the item’s key path, like the item’s own
+    expect(sections[0].parentElement).toHaveAttribute('data-lazy-key-path', 'links.0');
     expect(sections[0].querySelector('a')).toHaveAttribute('href', 'https://example.com/');
   });
 
@@ -105,6 +117,28 @@ describe('ListPreviewComplex', () => {
       'data-typed-key-path',
       'sections.*<hero>.heading',
     );
+  });
+
+  test('labels the types in the UI locale without a content locale', async () => {
+    await renderPreview(
+      {
+        name: 'sections',
+        widget: 'list',
+        types: [
+          {
+            name: 'hero',
+            label: 'Hero',
+            label_localized: { 'en-GB': 'Banner' },
+            fields: [{ name: 'heading', widget: 'string' }],
+          },
+        ],
+      },
+      { 'sections.0.type': 'hero', 'sections.0.heading': 'Welcome' },
+    );
+
+    await expect
+      .element(page.getByRole('group', { name: 'Banner' }).getByText('Welcome'))
+      .toBeVisible();
   });
 
   test('shows nothing when the list is empty', async () => {

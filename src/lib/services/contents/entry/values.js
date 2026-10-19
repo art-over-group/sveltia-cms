@@ -9,6 +9,7 @@ import { getNumberFormatter } from '$lib/services/contents/fields/number/helpers
 import { getReferencedOptionLabel } from '$lib/services/contents/fields/relation/helpers';
 import { getOptionLabel } from '$lib/services/contents/fields/select/helpers';
 import { getCanonicalLocale, getListFormatter } from '$lib/services/contents/i18n';
+import { getCommitAuthorName } from '$lib/services/utils/commit-author';
 import { stripMarkdown } from '$lib/services/utils/markdown';
 import { isNonEmptyString } from '$lib/services/utils/string';
 
@@ -22,6 +23,7 @@ import { isNonEmptyString } from '$lib/services/utils/string';
  * StringTransformation,
  * } from '$lib/types/private';
  * @import {
+ * ComputeField,
  * DateTimeField,
  * Field,
  * FieldKeyPath,
@@ -143,8 +145,10 @@ export const getFieldDisplayValue = ({
     }
   }
 
-  if (fieldConfig?.widget === 'number') {
-    const { value_type: valueType = 'int' } = /** @type {NumberField} */ (fieldConfig);
+  // A Compute field yielding a number has the same `value_type` option, but defaults to `string`
+  if (fieldConfig?.widget === 'number' || fieldConfig?.widget === 'compute') {
+    const { value_type: valueType = fieldConfig.widget === 'number' ? 'int' : 'string' } =
+      /** @type {NumberField | ComputeField} */ (fieldConfig);
 
     // An empty field, stored as `null` or an empty string, or missing, is left empty rather than
     // formatted as `0` or `NaN`
@@ -251,14 +255,14 @@ export const getVisibleFieldDisplayValue = ({
  * own key path.
  */
 export const getPropertyValue = ({ entry, locale, collectionName, key, resolveRef = true }) => {
-  const { slug, locales, commitAuthor: { name, login, email } = {}, commitDate } = entry;
+  const { slug, locales, commitAuthor, commitDate } = entry;
 
   if (key === 'slug') {
     return slug;
   }
 
   if (key === 'commit_author') {
-    return name || login || email;
+    return getCommitAuthorName(commitAuthor);
   }
 
   if (key === 'commit_date') {

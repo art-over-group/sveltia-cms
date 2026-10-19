@@ -17,7 +17,7 @@ import {
   resolveCacheDB,
 } from '$lib/services/contents/draft/save/file-changes';
 import { getCanonicalSlug, getFillSlugOptions } from '$lib/services/contents/draft/slugs';
-import { getField } from '$lib/services/contents/entry/fields';
+import { getDraftFieldArgs, getField } from '$lib/services/contents/entry/fields';
 import { RICH_TEXT_FIELD_TYPES } from '$lib/services/contents/fields';
 import { resolveFileConfig } from '$lib/services/contents/file/config';
 
@@ -152,23 +152,30 @@ const replaceBlobURLs = async ({
         nameTemplate,
       } = files[blobURL] ?? {};
 
-      if (file) {
-        // A file can only be cached without a folder, and there is no global folder either, when
-        // only a cloud media library is configured. The file has nowhere to go in the repository
-        if (!folder) {
-          throw new Error(`There is no asset folder to save the file "${file.name}" to`);
-        }
-
-        await replaceBlobURL({
-          ...replaceBlobArgs,
-          file,
-          folder,
-          replace,
-          subfolderPath,
-          nameTemplate,
-          blobURL,
-        });
+      // A blob URL only lives as long as the page, so one without the file it was made for, e.g.
+      // left by a backup whose file couldn’t be stored, would be saved as a broken link
+      if (!file) {
+        throw new Error(
+          `The file referenced in the "${field?.label ?? keyPath}" field is no longer available. ` +
+            'Select the file again.',
+        );
       }
+
+      // A file can only be cached without a folder, and there is no global folder either, when
+      // only a cloud media library is configured. The file has nowhere to go in the repository
+      if (!folder) {
+        throw new Error(`There is no asset folder to save the file "${file.name}" to`);
+      }
+
+      await replaceBlobURL({
+        ...replaceBlobArgs,
+        file,
+        folder,
+        replace,
+        subfolderPath,
+        nameTemplate,
+        blobURL,
+      });
     }),
   );
 };
@@ -285,17 +292,7 @@ const normalizeLocaleContent = async ({ path, canonicalSlug, canonicalSlugKey, .
 export const createBaseSavingEntryData = async ({ draft, slugs }) => {
   const { defaultLocaleSlug, localizedSlugs } = slugs;
   const _globalAssetFolder = globalAssetFolder.current;
-
-  const {
-    collection,
-    collectionName,
-    collectionFile,
-    fileName,
-    isIndexFile,
-    currentLocales,
-    currentValues,
-    files,
-  } = draft;
+  const { collection, collectionFile, currentLocales, currentValues, files } = draft;
 
   const {
     _i18n: {
@@ -308,8 +305,7 @@ export const createBaseSavingEntryData = async ({ draft, slugs }) => {
   /** @type {Asset[]} */
   const savingAssets = [];
   const { encode_file_path: encodingEnabled = false } = cmsConfig.current?.output ?? {};
-  /** @type {GetFieldArgs} */
-  const getFieldArgs = { collectionName, fileName, keyPath: '', valueMap: {}, isIndexFile };
+  const getFieldArgs = getDraftFieldArgs(draft, { keyPath: '', valueMap: {} });
   const canonicalSlug = getNestedCanonicalSlug({ draft, slugs }) ?? slugs.canonicalSlug;
 
   /** @type {NormalizeContentArgs} */

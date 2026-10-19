@@ -2,7 +2,7 @@
   import { _ } from '@sveltia/i18n';
   import { Button, Dialog, Spacer, VisibilityObserver } from '@sveltia/ui';
   import equal from 'fast-deep-equal';
-  import { onMount, setContext, untrack } from 'svelte';
+  import { onMount, setContext } from 'svelte';
   import { on } from 'svelte/events';
 
   import Image from '$lib/components/assets/shared/image.svelte';
@@ -15,6 +15,7 @@
     setEntryDraftContext,
     setEntryDraftRoot,
   } from '$lib/services/contents/draft/state.svelte';
+  import { deferDraftWrite } from '$lib/services/contents/draft/update/deferred';
   import { getValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
   import { awaitPendingFieldUpdates } from '$lib/services/contents/editor/pending';
   import {
@@ -468,11 +469,9 @@
             keyPathPrefix,
           );
 
-          // Write outside the effect: Svelte walks every reaction of a source an effect writes to,
-          // even within `untrack()`, which costs exponentially more with each level of nesting.
-          // The draft is looked up again, as it may have been replaced by then, e.g. reset after a
-          // save
-          queueMicrotask(() => {
+          // This runs from an effect, so the write to the draft is deferred. The draft is looked up
+          // again, as it may have been replaced by then, e.g. reset after a save
+          deferDraftWrite(() => {
             const draft = draftState.current;
 
             // Lexical unmounts the component on its own schedule, which may come after the draft
@@ -499,18 +498,15 @@
   );
 
   // Block mode: forward onChange whenever currentValues change
-  $effect(() => {
-    if (mode === 'dialog') return;
-
-    void [currentValues];
-
-    untrack(() => {
-      if (!equal(previousValues, currentValues)) {
+  watch(
+    () => [mode, currentValues],
+    () => {
+      if (mode !== 'dialog' && !equal(previousValues, currentValues)) {
         onChange(new CustomEvent('update', { detail: currentValues }));
         previousValues = currentValues;
       }
-    });
-  });
+    },
+  );
 </script>
 
 {#snippet fieldEditors(

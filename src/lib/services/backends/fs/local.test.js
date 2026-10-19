@@ -56,7 +56,8 @@ vi.mock('$lib/services/backends/fs/shared/load', () => ({
   loadFiles: mockLoadFiles,
 }));
 
-vi.mock('$lib/services/backends/fs/shared/handles', () => ({
+vi.mock('$lib/services/backends/fs/shared/handles', async (importOriginal) => ({
+  ...(await importOriginal()),
   readFile: mockReadFile,
   getScopedRootDirHandle: mockGetScopedRootDirHandle,
 }));
@@ -732,6 +733,17 @@ describe('Local Backend Service', () => {
       // Test verifies the function doesn't throw
       expect(service).toBeDefined();
       // The cached Git index is forgotten
+      expect(mockClearLocalGitCache).toHaveBeenCalled();
+    });
+
+    it('should forget the Git index even if the directory handle can’t be deleted', async () => {
+      const service = localBackend.default;
+
+      service.init();
+      mockDBDelete.mockRejectedValueOnce(new Error('IndexedDB error'));
+
+      await expect(service.signOut()).resolves.toBeUndefined();
+
       expect(mockClearLocalGitCache).toHaveBeenCalled();
     });
 

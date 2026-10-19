@@ -21,7 +21,10 @@ vi.mock('@sveltia/i18n', () => ({
   _: t,
 }));
 
-vi.mock('$lib/services/contents/entry/fields', () => ({
+vi.mock('$lib/services/contents/entry/fields', async (importOriginal) => ({
+  getDraftFieldArgs: /** @type {typeof import('$lib/services/contents/entry/fields')} */ (
+    await importOriginal()
+  ).getDraftFieldArgs,
   getField: vi.fn(),
   isFieldMultiple: vi.fn((fieldConfig) => !!fieldConfig.multiple),
 }));
@@ -292,6 +295,19 @@ describe('getFieldValidationMessages', () => {
       );
 
       expect(messages).toEqual(['validation.value_not_unique']);
+    });
+  });
+
+  describe('map key errors', () => {
+    it('returns the messages for a key of a List field stored as a map', () => {
+      const fieldConfig = { name: 'key', widget: 'string' };
+
+      expect(
+        getFieldValidationMessages(args({ validity: { mapKeyDuplicate: true }, fieldConfig })),
+      ).toEqual(['validation.key_not_unique']);
+      expect(
+        getFieldValidationMessages(args({ validity: { mapKeyNumeric: true }, fieldConfig })),
+      ).toEqual(['validation.key_numeric']);
     });
   });
 

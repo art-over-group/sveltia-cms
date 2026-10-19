@@ -1565,7 +1565,7 @@ config:
     oauth_implicit_flow: O método de autenticação configurado (implicit flow) não é suportado no Sveltia CMS. Use um <a>método de autenticação</a> diferente.
     github_pkce_unsupported: A autorização PKCE ainda não é suportada devido a limitações do GitHub. Use um <a>método de autenticação</a> diferente.
     oauth_no_app_id: O ID do aplicativo OAuth não está definido.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: A opção `open_authoring` requer o modo de publicação `editorial_workflow`. Consulte a <a>documentação</a> para mais detalhes.
     # Don’t localize `auth_methods`
     no_auth_methods: A opção `auth_methods` deve conter pelo menos um método.
@@ -1979,26 +1979,8 @@ prefs:
       description: Mostrar sublinhado para links na pré-visualização da entrada e nos rótulos da interface do usuário.
       switch_label: Sempre Sublinhar Links
 
-  # Advanced panel
-  advanced:
-    title: Avançado
-    beta:
-      title: Recursos Beta
-      description: Ativa alguns recursos beta que podem estar instáveis ou não localizados.
-      switch_label: Participar do Programa Beta
-    deploy_hook:
-      title: Deploy Hook
-      description: Insira uma URL de webhook para ser chamada quando você acionar manualmente uma implantação selecionando Publicar Alterações. Isso pode ficar em branco se você estiver usando o GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: URL do Hook
-        saved: URL do hook salva.
-        removed: URL do hook removida.
-      # Authorization header input
-      auth:
-        field_label: Cabeçalho de autorização (ex., Bearer <token>) (opcional)
-        saved: Cabeçalho de autorização salvo.
-        removed: Cabeçalho de autorização removido.
+  # Data Management panel
+  data:
     clear_data:
       title: Limpar Dados
       # Clear File Cache button
@@ -2018,6 +2000,19 @@ prefs:
       title: Modo Desenvolvedor
       description: Ativa alguns recursos voltados para desenvolvedores, incluindo logs detalhados no console e menus de contexto nativos.
       switch_label: Ativar Modo Desenvolvedor
+    deploy_hook:
+      title: Deploy Hook
+      description: Insira uma URL de webhook para ser chamada quando você acionar manualmente uma implantação selecionando Publicar Alterações. Isso pode ficar em branco se você estiver usando o GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: URL do Hook
+        saved: URL do hook salva.
+        removed: URL do hook removida.
+      # Authorization header input
+      auth:
+        field_label: Cabeçalho de autorização (ex., Bearer <token>) (opcional)
+        saved: Cabeçalho de autorização salvo.
+        removed: Cabeçalho de autorização removido.
 
 # ==============================================================================
 # Keyboard Shortcuts

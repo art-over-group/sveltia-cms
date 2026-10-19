@@ -3,6 +3,7 @@ import { forEachTargetLocale } from '$lib/services/contents/draft/update/locale'
 import { isKeyPathWithin } from '$lib/services/contents/entry/key-paths';
 import { getSubtree } from '$lib/services/contents/entry/subtree';
 import { getLocalizedRelationValue } from '$lib/services/contents/fields/relation/helpers/locale';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
 import { flattenKeys } from '$lib/services/utils/object';
 
 /**
@@ -112,8 +113,7 @@ export const updateListField = ({
   keyPath,
   manipulate,
 }) => {
-  const { collection, collectionFile } = draft;
-  const { defaultLocale } = (collectionFile ?? collection)._i18n;
+  const { defaultLocale } = getDraftI18nConfig(draft);
   const [valueList, valueListRemainder] = getItemList(draft[valueStoreKey][locale], keyPath);
   const isDefaultLocale = locale === defaultLocale;
   // Manipulation should only happen once with the default locale
@@ -151,7 +151,7 @@ export const updateListField = ({
  * @param {InternalLocaleCode} args.locale Locale being edited.
  * @param {Field['i18n']} args.i18n Field-level `i18n` option.
  * @param {boolean} [args.pairedItems] Whether the list’s items are paired across the locales,
- * because the list has a subfield with the `duplicate` strategy.
+ * because the list has a subfield with the `duplicate` or `duplicate_if_empty` strategy.
  * @param {Field} [args.fieldConfig] Field configuration. If given, the values of another locale are
  * localized for the manipulation, which works with the values of the locale being edited. This is
  * for a Relation field whose `value_field` option has a locale prefix, e.g. `{{locale}}/{{slug}}`,
@@ -191,7 +191,7 @@ export const updateListFieldForLocales = ({
       }),
     );
 
-  const { defaultLocale } = (draft.collectionFile ?? draft.collection)._i18n;
+  const { defaultLocale } = getDraftI18nConfig(draft);
 
   forEachTargetLocale(
     {

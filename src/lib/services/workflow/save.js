@@ -20,6 +20,7 @@ import {
 } from '$lib/services/contents/entry/relations/cascade/delete';
 import { forgetDeployments } from '$lib/services/deployments';
 import { refreshProductionSHA } from '$lib/services/deployments/resolve';
+import { shareInFlight } from '$lib/services/utils/cache';
 import {
   getUnpublishedEntryByBranch,
   getUnpublishedEntryBySlug,
@@ -401,7 +402,8 @@ const pendingPublishes = new Map();
  */
 const mergeWorkflowEntry = async (entry) => {
   const workflow = getWorkflowService();
-  const { pullRequest, status } = entry.workflow;
+  const { status } = entry.workflow;
+  let { pullRequest } = entry.workflow;
   const deletion = status === 'pending_deletion';
   const hookArgs = getEventHookArgs(entry);
 
@@ -420,6 +422,14 @@ const mergeWorkflowEntry = async (entry) => {
 
   if (hookArgs) {
     await callEventHooks({ ...hookArgs, type: preType });
+  }
+
+  // An entry in the drafting stage is kept as a draft pull request, which the Git service refuses
+  // to merge. It’s published from there with Preview Workflow or direct publishing, so it’s marked
+  // ready first, which also takes the draft marker off the pull request. This is left until the
+  // hooks have let the publish go ahead, so an entry isn’t marked ready for nothing
+  if (status === 'draft') {
+    ({ pullRequest } = (await updateWorkflowStatus(entry, 'pending_publish')).workflow);
   }
 
   await workflow.publish(pullRequest);
@@ -476,21 +486,16 @@ const mergeWorkflowEntry = async (entry) => {
  */
 export const publishWorkflowEntry = async (entry) => {
   const { branch } = entry.workflow.pullRequest;
-  const pending = pendingPublishes.get(branch);
 
-  if (pending) {
-    return pending;
-  }
+  return shareInFlight(pendingPublishes, branch, () => {
+    const promise = mergeWorkflowEntry(entry).finally(() => {
+      publishingBranches.current = publishingBranches.current.filter((b) => b !== branch);
+    });
 
-  const promise = mergeWorkflowEntry(entry).finally(() => {
-    pendingPublishes.delete(branch);
-    publishingBranches.current = publishingBranches.current.filter((b) => b !== branch);
+    publishingBranches.current = [...publishingBranches.current, branch];
+
+    return promise;
   });
-
-  pendingPublishes.set(branch, promise);
-  publishingBranches.current = [...publishingBranches.current, branch];
-
-  return promise;
 };
 
 /**
@@ -505,6 +510,16 @@ export const discardWorkflowEntry = async (entry) => {
   await workflow.discard(pullRequest);
   clearUnpublishedEntry(pullRequest, removeWorkflowAssets);
 };
+
+/**
+ * Get the changes that stand for the deletion of an entry in the commit message prompt and the
+ * pull request title: a single change naming the entry’s first file.
+ * @param {Entry} entry Entry to be deleted.
+ * @returns {FileChange[]} Changes.
+ */
+const getDeletionTitleChanges = (entry) => [
+  { action: 'delete', slug: entry.slug, path: getEntryPaths(entry)[0] },
+];
 
 /**
  * Delete the given published entry through Editorial Workflow: instead of committing the removal
@@ -558,8 +573,7 @@ export const deleteWorkflowEntry = async (
   // staged the deletion of the old paths there, so removing the new ones leaves nothing behind once
   // the merge lands
   const paths = getEntryPaths(entry);
-  /** @type {FileChange[]} */
-  const titleChanges = [{ action: 'delete', slug, path: paths[0] }];
+  const titleChanges = getDeletionTitleChanges(entry);
 
   const options = await promptCommitMessage(titleChanges, {
     commitType: 'delete',
@@ -680,10 +694,10 @@ export const deleteWorkflowEntries = async (items) => {
   // pull request is titled after its own entry, so the first one stands for the rest
   const [{ entry: firstEntry, collection: firstCollection }] = items;
 
-  const { userMessage } = await promptCommitMessage(
-    [{ action: 'delete', slug: firstEntry.slug, path: getEntryPaths(firstEntry)[0] }],
-    { commitType: 'delete', collection: firstCollection },
-  );
+  const { userMessage } = await promptCommitMessage(getDeletionTitleChanges(firstEntry), {
+    commitType: 'delete',
+    collection: firstCollection,
+  });
 
   await runConcurrently(items, async (item) => {
     const { entry, collection, collectionFile, assets } = item;

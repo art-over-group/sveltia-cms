@@ -2,6 +2,7 @@
   import { _ } from '@sveltia/i18n';
   import { Alert, EmptyState, Toast } from '@sveltia/ui';
   import { isTextFileType } from '@sveltia/utils/file';
+  import { onDestroy, untrack } from 'svelte';
 
   import DeleteAssetsButton from '$lib/components/assets/list/delete-assets-button.svelte';
   import DetailsOverlay from '$lib/components/assets/list/details-overlay.svelte';
@@ -20,13 +21,13 @@
     hasReadonlyAsset,
     selectedAssetFolder,
   } from '$lib/services/assets/folders';
-  import { getAssetBlob } from '$lib/services/assets/info';
+  import { getAssetBlob, preloadAssets } from '$lib/services/assets/info';
   import { canPreviewAsset, isMediaKind } from '$lib/services/assets/kinds';
   import { getAssetFolderHistoryState, showAssetDetails } from '$lib/services/assets/navigation';
   import { overlaidAsset } from '$lib/services/assets/state';
   import { browsedDirPath } from '$lib/services/assets/subfolders';
   import { assetGroups, getAdjacentAssets } from '$lib/services/assets/view';
-  import { isCommitCancelled } from '$lib/services/backends/commit-prompt';
+  import { runCommit } from '$lib/services/backends/commit-prompt';
   import { isSearchResultsPath } from '$lib/services/search/navigation';
   import { encodePathSegments } from '$lib/services/utils/url';
 
@@ -79,6 +80,20 @@
     showAssetDetails(target, { replaceState: true, transitionType });
   };
 
+  // Load the adjacent images ahead of time, so moving to one of them is instant. Other kinds aren’t
+  // worth downloading in full on the off chance, e.g. a video. The shown asset is kept as well, so
+  // the one just moved to isn’t released before its preview displays it
+  $effect(() => {
+    const targets = /** @type {Asset[]} */ ([previous, next].filter((a) => a?.kind === 'image'));
+    const keep = asset ? [asset] : [];
+
+    untrack(() => preloadAssets(targets, { keep }));
+  });
+
+  onDestroy(() => {
+    preloadAssets([]);
+  });
+
   $effect(() => {
     // Hold on to the asset, as the derived value follows the overlay while the blob is being read
     const current = asset;
@@ -117,21 +132,15 @@
       {assets}
       disabled={assetsLocked.current || hasReadonlyAsset(assets)}
       deleteAssets={async (_assets) => {
-        try {
-          await deleteAssets(_assets);
-        } catch (/** @type {any} */ ex) {
-          // The user has cancelled the commit at the commit message prompt, which isn’t a failure
-          if (!isCommitCancelled(ex)) {
-            deletingFailed = true;
-            // eslint-disable-next-line no-console
-            console.error(ex);
-          }
+        const { ok, cancelled } = await runCommit(() => deleteAssets(_assets));
 
-          // Stay on the asset, which is still there
-          return false;
+        // A cancellation at the commit message prompt isn’t a failure
+        if (!ok && !cancelled) {
+          deletingFailed = true;
         }
 
-        return true;
+        // On failure, stay on the asset, which is still there
+        return ok;
       }}
       planDeletion={planAssetDeletion}
       buttonDescription={_('delete_assets', { values: { count: 1 } })}
@@ -156,6 +165,9 @@
         checkerboard={kind === 'image'}
         alt={kind === 'image' ? name : undefined}
         controls={['audio', 'video'].includes(kind)}
+        loading="eager"
+        dissolve={false}
+        holdTransition={true}
       />
     {:else if blob?.type === 'application/pdf'}
       <iframe src={blobURL} title={name} sandbox="allow-scripts"></iframe>

@@ -44,7 +44,7 @@
   import { assetURLUpdates } from '$lib/services/api/asset-proxy';
   import { fieldStateContext } from '$lib/services/api/field-state';
   import { immutableLoaded, loadImmutable } from '$lib/services/api/immutable';
-  import { getReactDom, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
+  import { createReactRoot, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
   import { updateNonPrimitiveValue } from '$lib/services/contents/draft/update';
   import {
@@ -53,11 +53,11 @@
     unregisterCustomFieldInstance,
   } from '$lib/services/contents/draft/validate/custom-fields';
   import { getValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
+  import { isInEditorComponent } from '$lib/services/contents/editor/field-context';
   import { buildControlProps, resolveControl } from '$lib/services/contents/fields/custom/editor';
   import { addFileToDraft } from '$lib/services/contents/fields/custom/files';
 
   /**
-   * @import { Root } from 'react-dom/client';
    * @import { FieldEditorContext, FieldEditorProps, InternalLocaleCode } from '$lib/types/private';
    * @import {
    * CustomField,
@@ -79,12 +79,9 @@
   const entryDraft = getEntryDraftContext();
 
   /** @type {FieldEditorContext} */
-  const {
-    valueStoreKey = 'currentValues',
-    fieldContext = undefined,
-    parentComponentNames = [],
-  } = getContext('field-editor') ?? {};
-  const inEditorComponent = fieldContext === 'rich-text-editor-component';
+  const { valueStoreKey = 'currentValues', parentComponentNames = [] } =
+    getContext('field-editor') ?? {};
+  const inEditorComponent = isInEditorComponent(valueStoreKey);
 
   /** @type {FieldEditorProps & Props} */
   let {
@@ -107,7 +104,7 @@
   /**
    * React root, created on the first render. Not reactive, as the effect rendering the component
    * assigns it, and would otherwise run again right away.
-   * @type {Root | undefined}
+   * @type {ReturnType<typeof createReactRoot> | undefined}
    */
   let reactRoot;
   /**
@@ -218,7 +215,7 @@
       return;
     }
 
-    reactRoot ??= getReactDom().createRoot(container);
+    reactRoot ??= createReactRoot(container);
 
     const props = buildControlProps({
       fieldId,
