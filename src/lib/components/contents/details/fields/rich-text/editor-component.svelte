@@ -2,7 +2,7 @@
   import { _ } from '@sveltia/i18n';
   import { Button, Dialog, Spacer, VisibilityObserver } from '@sveltia/ui';
   import equal from 'fast-deep-equal';
-  import { onMount, setContext, untrack } from 'svelte';
+  import { onMount } from 'svelte';
   import { on } from 'svelte/events';
 
   import Image from '$lib/components/assets/shared/image.svelte';
@@ -15,14 +15,19 @@
     setEntryDraftContext,
     setEntryDraftRoot,
   } from '$lib/services/contents/draft/state.svelte';
+  import { deferDraftWrite } from '$lib/services/contents/draft/update/deferred';
   import { getValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
+  import { setFieldEditorContext } from '$lib/services/contents/editor/field-context';
   import { awaitPendingFieldUpdates } from '$lib/services/contents/editor/pending';
   import {
     getComponentDisplayText,
     getComponentDisplayValues,
   } from '$lib/services/contents/fields/rich-text/components/summary';
   import { getComponentThumbnail } from '$lib/services/contents/fields/rich-text/components/thumbnail';
-  import { getParentComponentNames } from '$lib/services/contents/fields/rich-text/components/utils';
+  import {
+    getParentComponentNames,
+    observeReadonly,
+  } from '$lib/services/contents/fields/rich-text/components/utils';
   import { validateComponentValues } from '$lib/services/contents/fields/rich-text/components/validate';
   import {
     deleteKeysByPrefix,
@@ -91,9 +96,14 @@
    * @type {string[]}
    */
   let parentComponentNames = $state.raw([]);
+  /**
+   * Whether the rich text field this component is in can’t be edited, e.g. with the `readonly`
+   * option or in a locale that follows the default one. It’s also looked up through the DOM, and
+   * handed down to the field editors below, which are otherwise unaware of it.
+   */
+  let readonly = $state(false);
 
-  setContext(
-    'field-editor',
+  setFieldEditorContext(
     /** @type {FieldEditorContext} */ ({
       /**
        * Get the names of the components this one is nested in.
@@ -101,6 +111,13 @@
        */
       get parentComponentNames() {
         return parentComponentNames;
+      },
+      /**
+       * Get whether the fields can’t be edited.
+       * @returns {boolean} Result.
+       */
+      get readonly() {
+        return readonly;
       },
     }),
   );
@@ -222,7 +239,7 @@
       event.preventDefault();
     }
 
-    if (target === wrapper && event.key === 'Backspace') {
+    if (target === wrapper && event.key === 'Backspace' && !readonly) {
       onChange(new CustomEvent('remove'));
     }
   };
@@ -243,6 +260,11 @@
    * back into the draft. A plain variable, as it’s read outside of any reactive context.
    */
   let unmounted = false;
+  /**
+   * Observer following the read-only state of the rich text field this component is in.
+   * @type {MutationObserver | undefined}
+   */
+  let readonlyObserver = undefined;
 
   /**
    * Current values for the editor component. These values are stored in the {@link entryDraft}
@@ -410,6 +432,9 @@
       entryDraft = getEntryDraftByElement(wrapper);
       // Before the locale and key path, which render the field editors: they read the names once
       parentComponentNames = getParentComponentNames(wrapper);
+      readonlyObserver = observeReadonly(wrapper, (value) => {
+        readonly = value;
+      });
 
       const localeContainer = /** @type {HTMLElement} */ (wrapper?.closest('[data-locale]'));
       const keyPathContainer = /** @type {HTMLElement} */ (wrapper?.closest('[data-key-path]'));
@@ -434,6 +459,7 @@
       const draft = entryDraft?.current;
 
       unmounted = true;
+      readonlyObserver?.disconnect();
 
       // Remove the values and validities from the draft when the component is unmounted
       if (draft) {
@@ -468,11 +494,9 @@
             keyPathPrefix,
           );
 
-          // Write outside the effect: Svelte walks every reaction of a source an effect writes to,
-          // even within `untrack()`, which costs exponentially more with each level of nesting.
-          // The draft is looked up again, as it may have been replaced by then, e.g. reset after a
-          // save
-          queueMicrotask(() => {
+          // This runs from an effect, so the write to the draft is deferred. The draft is looked up
+          // again, as it may have been replaced by then, e.g. reset after a save
+          deferDraftWrite(() => {
             const draft = draftState.current;
 
             // Lexical unmounts the component on its own schedule, which may come after the draft
@@ -499,18 +523,15 @@
   );
 
   // Block mode: forward onChange whenever currentValues change
-  $effect(() => {
-    if (mode === 'dialog') return;
-
-    void [currentValues];
-
-    untrack(() => {
-      if (!equal(previousValues, currentValues)) {
+  watch(
+    () => [mode, currentValues],
+    () => {
+      if (mode !== 'dialog' && !equal(previousValues, currentValues)) {
         onChange(new CustomEvent('update', { detail: currentValues }));
         previousValues = currentValues;
       }
-    });
-  });
+    },
+  );
 </script>
 
 {#snippet fieldEditors(
@@ -574,7 +595,10 @@
 
       if (event.key === 'Backspace') {
         event.preventDefault();
-        onChange(new CustomEvent('remove'));
+
+        if (!readonly) {
+          onChange(new CustomEvent('remove'));
+        }
       }
     }}
   >
@@ -621,21 +645,26 @@
         {/if}
       </div>
       {#snippet footer()}
-        <Button
-          variant="secondary"
-          label={_('remove')}
-          onclick={() => {
-            handleRemove();
-          }}
-        />
+        <!-- A read-only component can only be viewed, so the dialog can only be dismissed -->
+        {#if !readonly}
+          <Button
+            variant="secondary"
+            label={_('remove')}
+            onclick={() => {
+              handleRemove();
+            }}
+          />
+        {/if}
         <Spacer flex={true} />
-        <Button
-          variant="primary"
-          label={_(isNewComponent ? 'insert' : 'update')}
-          onclick={() => {
-            handleOk();
-          }}
-        />
+        {#if !readonly}
+          <Button
+            variant="primary"
+            label={_(isNewComponent ? 'insert' : 'update')}
+            onclick={() => {
+              handleOk();
+            }}
+          />
+        {/if}
         <Button
           variant="secondary"
           label={_('cancel')}
@@ -689,11 +718,13 @@
       bind:expanded
     >
       {#snippet endContent()}
-        <RemoveButton
-          onclick={() => {
-            onChange(new CustomEvent('remove'));
-          }}
-        />
+        {#if !readonly}
+          <RemoveButton
+            onclick={() => {
+              onChange(new CustomEvent('remove'));
+            }}
+          />
+        {/if}
       {/snippet}
     </ObjectHeader>
     {#if hasFields}

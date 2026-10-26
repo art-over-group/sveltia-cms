@@ -22,6 +22,8 @@ const mockI18nStrings = {
     'OAuth application ID is not defined. Users are required to provide an access token to sign in.',
   'config.error.open_authoring_no_workflow':
     'The `open_authoring` option requires the `editorial_workflow` publish mode.',
+  'config.error.auth_scope_no_repo':
+    'The `auth_scope` option must include `repo` or `public_repo`.',
 };
 
 vi.mock('@sveltia/i18n', async () =>
@@ -58,8 +60,10 @@ vi.mock('$lib/services/backends/git/services', () => ({
 }));
 
 const mockCheckUnsupportedOptions = vi.fn();
+const mockAddMessage = vi.fn();
 
 vi.mock('$lib/services/config/parser/utils/validator', () => ({
+  addMessage: mockAddMessage,
   checkUnsupportedOptions: mockCheckUnsupportedOptions,
 }));
 
@@ -419,6 +423,63 @@ describe('parseBackendConfig', () => {
       const [error] = [...collectors.errors];
 
       expect(error).toBe('Invalid repository format');
+    });
+  });
+
+  describe('URL options', () => {
+    it('should accept absolute URLs', async () => {
+      const { parseBackendConfig } = await import('./backend.js');
+      const collectors = createCollectors();
+
+      /** @type {any} */
+      const config = {
+        backend: {
+          name: 'github',
+          repo: 'owner/repo',
+          api_root: 'https://github.example.com/api/v3',
+          graphql_api_root: 'https://github.example.com/api/graphql',
+          base_url: 'https://auth.example.com',
+        },
+      };
+
+      parseBackendConfig(config, collectors);
+
+      expect(mockAddMessage).not.toHaveBeenCalled();
+    });
+
+    it('should report URLs without a scheme and empty ones', async () => {
+      const { parseBackendConfig } = await import('./backend.js');
+      const collectors = createCollectors();
+
+      /** @type {any} */
+      const config = {
+        backend: {
+          name: 'github',
+          repo: 'owner/repo',
+          api_root: 'github.example.com/api/v3',
+          graphql_api_root: 'localhost:8080/api/graphql',
+          base_url: ' ',
+        },
+      };
+
+      parseBackendConfig(config, collectors);
+
+      expect(mockAddMessage.mock.calls.map(([{ strKey, values }]) => [strKey, values])).toEqual([
+        ['invalid_url_option', { option: 'api_root', url: 'github.example.com/api/v3' }],
+        ['invalid_url_option', { option: 'graphql_api_root', url: 'localhost:8080/api/graphql' }],
+        ['invalid_url_option', { option: 'base_url', url: ' ' }],
+      ]);
+    });
+
+    it('should leave values of another type to the JSON schema', async () => {
+      const { parseBackendConfig } = await import('./backend.js');
+      const collectors = createCollectors();
+      /** @type {any} */
+      const config = { backend: { name: 'gitlab', repo: 'owner/repo', api_root: 42 } };
+
+      parseBackendConfig(config, collectors);
+
+      expect(mockAddMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -912,6 +973,49 @@ describe('parseBackendConfig', () => {
       parseBackendConfig(config, collectors);
 
       expect(collectors.warnings.size).toBe(0);
+    });
+
+    it('should accept a list of scopes that adds `workflow`', async () => {
+      const { parseBackendConfig } = await import('./backend.js');
+      const collectors = createCollectors();
+
+      /** @type {any} */
+      const config = {
+        publish_mode: 'editorial_workflow',
+        backend: {
+          name: 'github',
+          repo: 'owner/repo',
+          open_authoring: true,
+          auth_scope: ['public_repo', 'workflow'],
+        },
+      };
+
+      parseBackendConfig(config, collectors);
+
+      expect(collectors.errors.size).toBe(0);
+      expect(collectors.warnings.size).toBe(0);
+    });
+
+    it('should error when a list of scopes has no repository scope', async () => {
+      const { parseBackendConfig } = await import('./backend.js');
+      const collectors = createCollectors();
+
+      /** @type {any} */
+      const config = {
+        publish_mode: 'editorial_workflow',
+        backend: {
+          name: 'github',
+          repo: 'owner/repo',
+          open_authoring: true,
+          auth_scope: ['workflow'],
+        },
+      };
+
+      parseBackendConfig(config, collectors);
+
+      expect([...collectors.errors]).toEqual([
+        'The `auth_scope` option must include `repo` or `public_repo`.',
+      ]);
     });
 
     it('should error without the editorial workflow publish mode', async () => {

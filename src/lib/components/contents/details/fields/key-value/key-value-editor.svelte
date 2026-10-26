@@ -10,7 +10,7 @@
 <script>
   import { _ } from '@sveltia/i18n';
   import { TextInput } from '@sveltia/ui';
-  import { getContext, tick } from 'svelte';
+  import { tick } from 'svelte';
   import { flip } from 'svelte/animate';
 
   import RemoveButton from '$lib/components/common/remove-button.svelte';
@@ -18,7 +18,9 @@
   import ValidationError from '$lib/components/contents/details/editor/validation-error.svelte';
   import AddItemButton from '$lib/components/contents/details/fields/object/add-item-button.svelte';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
+  import { deferDraftWrite } from '$lib/services/contents/draft/update/deferred';
   import { getFieldValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
+  import { getFieldEditorContext } from '$lib/services/contents/editor/field-context';
   import {
     getPairs,
     getPairsToSave,
@@ -35,7 +37,7 @@
   import { createStableDerivedState, watch } from '$lib/services/utils/state.svelte';
 
   /**
-   * @import { FieldEditorContext, FieldEditorProps } from '$lib/types/private';
+   * @import { FieldEditorProps } from '$lib/types/private';
    * @import { KeyValueField } from '$lib/types/public';
    */
 
@@ -47,8 +49,7 @@
 
   const entryDraft = getEntryDraftContext();
 
-  /** @type {FieldEditorContext} */
-  const { valueStoreKey = 'currentValues' } = getContext('field-editor') ?? {};
+  const { valueStoreKey = 'currentValues' } = getFieldEditorContext();
 
   /** @type {FieldEditorProps & Props} */
   let {
@@ -131,9 +132,8 @@
     if (shouldStorePlaceholder({ storedPairs: updatedPairs, storedValue: valueStore[keyPath] })) {
       const _keyPath = keyPath;
 
-      // Enable validation. This runs from an effect, so the write is deferred like the one in
-      // `updateStore()`
-      queueMicrotask(() => {
+      // Enable validation. This runs from an effect, so the write is deferred
+      deferDraftWrite(() => {
         valueStore[_keyPath] = null;
       });
     }
@@ -255,10 +255,8 @@
       pairs: $state.snapshot(pairs),
     };
 
-    // This runs from an effect, so defer the write to the draft like `<FieldEditor>` does: a write
-    // made while an effect is running makes Svelte walk the derived graph below the value map
-    // without memoizing, which takes exponentially longer with each level of nesting
-    queueMicrotask(() => {
+    // This runs from an effect, so the write to the draft is deferred
+    deferDraftWrite(() => {
       savePairs(args);
     });
   };
@@ -304,11 +302,7 @@
         {/if}
       </tr>
     </thead>
-    <tbody
-      bind:this={tableBody}
-      ondragovercapture={sorter.onDragOver}
-      ondropcapture={sorter.onDrop}
-    >
+    <tbody bind:this={tableBody} {...sorter.listProps}>
       {#each sorter.displayOrder as index (rows.ids[index])}
         <tr
           bind:this={rowElements[index]}
@@ -323,9 +317,7 @@
                   {index}
                   itemCount={rows.values.length}
                   disabled={rows.values.length < 2}
-                  onGrab={() => sorter.grab(index)}
-                  onRelease={sorter.release}
-                  onMove={(to, action) => sorter.move(index, to, action)}
+                  {...sorter.reorderControlProps(index)}
                 />
               </div>
             </td>
@@ -409,6 +401,7 @@
     <AddItemButton
       disabled={keysReadonly}
       {fieldConfig}
+      {locale}
       items={rows.values}
       addItem={() => {
         addPair();

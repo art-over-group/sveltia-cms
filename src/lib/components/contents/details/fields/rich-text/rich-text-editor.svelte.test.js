@@ -343,32 +343,116 @@ describe('RichTextEditor', () => {
     await expect.poll(() => props.currentValue).not.toContain('plain');
   });
 
-  test('offers no components when nested ones are disabled by the parent field', async () => {
+  test('inserts no dropped or pasted image into a read-only field', async () => {
     await initTestConfig({
       collections: [
         {
-          name: 'nested-off',
+          name: 'posts',
           label: 'Posts',
           folder: 'content/posts',
-          fields: [{ name: 'body', widget: 'richtext', allow_nested_components: false }],
+          fields: [{ name: 'body', widget: 'richtext' }],
         },
       ],
     });
 
-    await renderEditor(
-      'Hi',
-      {},
-      {
-        // The field config is cached per collection, so each test uses its own one
-        collectionName: 'nested-off',
-        context: { fieldContext: 'rich-text-editor-component', parentComponentNames: ['card'] },
-        props: { keyPath: 'body:c1:content', typedKeyPath: 'body:c1:content' },
-      },
-    );
+    const { props, draft } = await renderEditor('Hello', {}, { props: { readonly: true } });
+    const editor = page.getByRole('textbox');
 
-    await expect.element(page.getByRole('button', { name: 'Bold' })).toBeVisible();
-    expect(page.getByRole('button', { name: /Insert/ }).elements()).toHaveLength(0);
+    await expect.poll(() => editor.element().textContent).toBe('Hello');
+
+    const dropped = new DataTransfer();
+
+    dropped.items.add(await createMockImageFile({ name: 'photo.png' }));
+    editor
+      .element()
+      .dispatchEvent(
+        new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dropped }),
+      );
+
+    const pasted = new DataTransfer();
+
+    pasted.items.add(await createMockImageFile({ name: 'pasted.png' }));
+    editor
+      .element()
+      .dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: pasted }),
+      );
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 300);
+    });
+    expect(props.currentValue).toBe('Hello');
+    expect(Object.keys(draft.files)).toHaveLength(0);
   });
+
+  test('locks the components in a read-only field', async () => {
+    await initTestConfig({
+      collections: [
+        {
+          name: 'posts',
+          label: 'Posts',
+          folder: 'content/posts',
+          fields: [{ name: 'body', widget: 'richtext' }],
+        },
+      ],
+    });
+
+    const { props } = await renderEditor('![Cat](/cat.png)', {}, { props: { readonly: true } });
+    const component = page.getByRole('group', { name: 'Image', exact: true });
+
+    // The component learns that the field is read-only once it’s in place
+    await expect.element(component).toBeVisible();
+    await expect
+      .poll(() => component.getByRole('button', { name: 'Remove' }).elements())
+      .toEqual([]);
+
+    // The component isn’t removed with the Backspace key either
+    component
+      .element()
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 300);
+    });
+    expect(props.currentValue).toBe('![Cat](/cat.png)');
+  });
+
+  // A List with a single subfield gives it a context of its own, which mustn’t hide the component
+  test.each([
+    ['rich-text-editor-component', 'nested-off', 'body:c1:content', 'body:c1:content'],
+    ['single-subfield-list-field', 'nested-off-list', 'body:c1:notes.0', 'body:c1:notes.*'],
+  ])(
+    'offers no components when nested ones are disabled by the parent field (%s)',
+    async (fieldContext, collectionName, keyPath, typedKeyPath) => {
+      await initTestConfig({
+        collections: [
+          {
+            name: collectionName,
+            label: 'Posts',
+            folder: 'content/posts',
+            fields: [{ name: 'body', widget: 'richtext', allow_nested_components: false }],
+          },
+        ],
+      });
+
+      await renderEditor(
+        'Hi',
+        {},
+        {
+          // The field config is cached per collection, so each test uses its own one
+          collectionName,
+          context: {
+            fieldContext,
+            parentComponentNames: ['card'],
+            valueStoreKey: 'extraValues',
+          },
+          props: { keyPath, typedKeyPath },
+        },
+      );
+
+      await expect.element(page.getByRole('button', { name: 'Bold' })).toBeVisible();
+      expect(page.getByRole('button', { name: /Insert|Image/ }).elements()).toHaveLength(0);
+    },
+  );
 
   test('leaves the current component out of the nested ones', async () => {
     await initTestConfig({
@@ -392,6 +476,7 @@ describe('RichTextEditor', () => {
         context: {
           fieldContext: 'rich-text-editor-component',
           parentComponentNames: ['linked-image'],
+          valueStoreKey: 'extraValues',
         },
         props: { keyPath: 'body:c1:content', typedKeyPath: 'body:c1:content' },
       },
@@ -451,6 +536,7 @@ describe('RichTextEditor', () => {
           context: {
             fieldContext: 'rich-text-editor-component',
             parentComponentNames: ['x-youtube'],
+            valueStoreKey: 'extraValues',
           },
           props: { keyPath: 'body:c1:content', typedKeyPath: 'body:c1:content' },
         },

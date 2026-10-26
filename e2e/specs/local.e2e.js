@@ -5,7 +5,7 @@ import { dirname, join, relative } from 'node:path';
 
 import { createPNG } from '../fixtures/files.js';
 import { expect, GITHUB_CONFIG, test, TEST_REPO_DIR_NAME } from '../fixtures/test.js';
-import { getEditor, openFirstPost } from '../fixtures/ui.js';
+import { getEditor, getEntryRows, openFirstPost } from '../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -231,9 +231,7 @@ test.describe('with a root directory', () => {
       [`apps/docs/${POST_PATH}`]: '---\ntitle: Docs Post\n---\n\nRead the docs.\n',
     });
     await page.getByRole('button', { name: 'Work with Local Repository' }).click();
-    await expect(page.getByRole('group', { name: 'Entry List' }).getByRole('row')).toHaveText([
-      /First Post/,
-    ]);
+    await expect(getEntryRows(page)).toHaveText([/First Post/]);
 
     const editor = await openFirstPost(page);
 
@@ -271,7 +269,15 @@ test.describe('Git commits', () => {
   const git = (cwd, ...args) =>
     execFileSync('git', args, {
       cwd,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        // No detached `git maintenance` after a commit
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'maintenance.auto',
+        GIT_CONFIG_VALUE_0: 'false',
+      },
       stdio: 'pipe',
     })
       .toString()

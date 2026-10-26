@@ -1,8 +1,9 @@
 import { sortItemsByKey } from '$lib/services/common/view';
 import { isCollectionIndexFile } from '$lib/services/contents/collection/entries/index-file';
 import { getOrderFieldKey } from '$lib/services/contents/collection/entries/reorder/config';
-import { sortEntriesByOrderField } from '$lib/services/contents/collection/entries/reorder/sort';
+import { getOrderValueGetter } from '$lib/services/contents/collection/entries/reorder/sort';
 import { getSortKeyType } from '$lib/services/contents/collection/view/sort-keys';
+import { SUMMARY_COLUMN_KEY } from '$lib/services/contents/collection/view/table-keys';
 import { getField } from '$lib/services/contents/entry/fields';
 import { getEntrySummary } from '$lib/services/contents/entry/summary';
 import { getPropertyValue } from '$lib/services/contents/entry/values';
@@ -68,7 +69,7 @@ export const getSortKeyGetter = ({
   isMarkdownField,
 }) => {
   // Special handling for summary, which uses a generated value instead of a raw field value
-  if (key === '_summary') {
+  if (key === SUMMARY_COLUMN_KEY) {
     return (/** @type {Entry} */ entry) =>
       getEntrySummary(collection, entry, { locale, useTemplate: true });
   }
@@ -76,7 +77,7 @@ export const getSortKeyGetter = ({
   if (dateFieldConfig) {
     return (/** @type {Entry} */ entry) => {
       const raw = getPropertyValue({ entry, locale, collectionName, key });
-      const time = getDate(raw, dateFieldConfig)?.getTime() ?? NaN;
+      const time = getDate(raw, dateFieldConfig, locale)?.getTime() ?? NaN;
 
       // A date that can’t be parsed is no better than a missing one
       return Number.isNaN(time) ? undefined : time;
@@ -117,6 +118,43 @@ export const getSortKeyGetter = ({
 };
 
 /**
+ * Get a function that computes the sort key of an entry for the given field, along with how the
+ * keys are compared. It doesn’t support the `_manual` key, which sorts by the reorder field.
+ * @param {object} args Arguments.
+ * @param {InternalCollection} args.collection Collection that the entries belong to.
+ * @param {string} args.key Sort key field path, or one of the special sort keys like `slug`.
+ * @param {string} args.locale Locale of the content to read the values from.
+ * @returns {{ getSortKey: (entry: Entry) => string | number | undefined, isStringType: boolean }}
+ * Sort key getter, and whether the keys are strings to be compared in a locale-aware manner rather
+ * than numbers.
+ */
+export const getEntrySortKeyGetter = ({ collection, key, locale }) => {
+  const { name: collectionName } = collection;
+  const fieldConfig = getField({ collectionName, keyPath: key });
+  const type = getSortKeyType({ key, fieldConfig });
+
+  const dateFieldConfig =
+    fieldConfig?.widget === 'datetime' ? /** @type {DateTimeField} */ (fieldConfig) : undefined;
+
+  // Check if the field is a Markdown-enabled field: we use both the field config and a hardcoded
+  // key list to determine this, as some fields may be text fields that contain Markdown syntax.
+  const isMarkdownField =
+    RICH_TEXT_FIELD_TYPES.includes(fieldConfig?.widget ?? '') || MARKDOWN_FIELD_KEYS.includes(key);
+
+  const getSortKey = getSortKeyGetter({
+    key,
+    type,
+    collection,
+    locale,
+    collectionName,
+    dateFieldConfig,
+    isMarkdownField,
+  });
+
+  return { getSortKey, isStringType: !dateFieldConfig && type === String };
+};
+
+/**
  * Move the collection’s index file to the top of the sorted entries, where it should always be.
  * It’s told by its path rather than by its slug, because another collection’s index file within
  * this collection’s folder carries the same slug.
@@ -151,51 +189,24 @@ export const sortEntries = (entries, collection, { key, order } = {}) => {
   }
 
   const {
-    name: collectionName,
     _i18n: { defaultLocale: locale },
   } = collection;
 
   // The `_manual` special key sorts by the collection’s reorder field, or by the position in the
   // array. Either way, the entries are sorted the same as in the reorder UI and when they are
-  // renumbered: an entry without a valid number goes last, keeping its place among the others. The
-  // field may not be defined under the collection’s `fields`, so it would otherwise default to a
-  // string sort, and a missing value would come first
-  if (key === '_manual' || key === getOrderFieldKey(collection)) {
-    const sorted = sortEntriesByOrderField(
-      entries,
-      /** @type {InternalEntryCollection} */ (collection),
-    );
-
-    if (order === 'descending') {
-      sorted.reverse();
-    }
-
-    return moveIndexFileToTop(sorted, collection);
-  }
-
-  const fieldConfig = getField({ collectionName, keyPath: key });
-  const type = getSortKeyType({ key, fieldConfig });
-
-  const dateFieldConfig =
-    fieldConfig?.widget === 'datetime' ? /** @type {DateTimeField} */ (fieldConfig) : undefined;
-
-  // Check if the field is a Markdown-enabled field: we use both the field config and a hardcoded
-  // key list to determine this, as some fields may be text fields that contain Markdown syntax.
-  const isMarkdownField =
-    RICH_TEXT_FIELD_TYPES.includes(fieldConfig?.widget ?? '') || MARKDOWN_FIELD_KEYS.includes(key);
-
-  const getSortKey = getSortKeyGetter({
-    key,
-    type,
-    collection,
-    locale,
-    collectionName,
-    dateFieldConfig,
-    isMarkdownField,
-  });
+  // renumbered: an entry without a valid number goes last in either order, keeping its place among
+  // the others, as with any other key. The field may not be defined under the collection’s
+  // `fields`, so it would otherwise default to a string sort, and a missing value would come first
+  const { getSortKey, isStringType } =
+    key === '_manual' || key === getOrderFieldKey(collection)
+      ? {
+          getSortKey: getOrderValueGetter(/** @type {InternalEntryCollection} */ (collection)),
+          isStringType: false,
+        }
+      : getEntrySortKeyGetter({ collection, key, locale });
 
   // `sortItemsByKey()` computes the key once per entry, so there’s no need for a lookup table here
-  sortItemsByKey(_entries, getSortKey, !dateFieldConfig && type === String, order);
+  sortItemsByKey(_entries, getSortKey, isStringType, order);
 
   return moveIndexFileToTop(_entries, collection);
 };

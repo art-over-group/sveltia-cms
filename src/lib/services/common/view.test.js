@@ -6,6 +6,7 @@ import { createRawState } from '$lib/services/utils/state.svelte';
 
 import {
   buildGroupMap,
+  compareSortKeys,
   COMPARISON_OPERATORS,
   getCollapsibleGroupNames,
   getConditionKey,
@@ -663,6 +664,26 @@ describe('Test initViewSettingsStorage()', () => {
     expect(settings.current).toEqual({ posts: { type: 'grid' } });
   });
 
+  test('starts with the defaults if the settings can’t be read or aren’t an object', async () => {
+    /** @type {{ current: Record<string, any> | undefined }} */
+    const settings = createRawState();
+    const defaults = { showPreview: true };
+
+    mockDB.get.mockRejectedValueOnce(new Error('Internal error'));
+    await initViewSettingsStorage({ databaseName: 'test-db' }, 'entry-view', settings, {
+      defaults,
+    });
+
+    expect(settings.current).toEqual(defaults);
+
+    mockDB.get.mockResolvedValueOnce('corrupt');
+    await initViewSettingsStorage({ databaseName: 'test-db' }, 'entry-view', settings, {
+      defaults,
+    });
+
+    expect(settings.current).toEqual(defaults);
+  });
+
   test('starts with empty settings without a database', async () => {
     /** @type {{ current: Record<string, any> | undefined }} */
     const settings = createRawState();
@@ -741,5 +762,15 @@ describe('Test initViewSettingsStorage()', () => {
     await wait();
 
     expect(mockDB.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('compareSortKeys', () => {
+  test('compares strings locale-aware and numbers by subtraction', () => {
+    expect(compareSortKeys('a', 'b', true)).toBeLessThan(0);
+    expect(compareSortKeys('b', 'a', true)).toBeGreaterThan(0);
+    expect(compareSortKeys('a', 'a', true)).toBe(0);
+    expect(compareSortKeys(2, 10, false)).toBe(-8);
+    expect(compareSortKeys(10, 2, false)).toBe(8);
   });
 });

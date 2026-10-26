@@ -10,8 +10,10 @@
   import Image from '$lib/components/assets/shared/image.svelte';
   import FieldEditor from '$lib/components/contents/details/editor/field-editor.svelte';
   import { env } from '$lib/services/user/env.svelte';
+  import { sanitizeHelpText } from '$lib/services/utils/string';
 
   /**
+   * @import { Snippet } from 'svelte';
    * @import {
    * FieldContext,
    * InternalLocaleCode,
@@ -40,7 +42,10 @@
    * @property {() => string} getSummary Function returning the summary shown while collapsed.
    * @property {() => MediaFieldSource | undefined} getThumbnail Function returning the thumbnail
    * shown along with the summary.
+   * @property {Snippet} [summaryContent] Content drawn in place of the summary text while
+   * collapsed, e.g. by a custom field type’s summary component.
    * @property {string} [summaryId] `id` of the summary, so the value can be labelled by it.
+   * @property {string} [hint] Help message of the value’s variable type, shown above the subfields.
    */
 
   /** @type {Props} */
@@ -53,7 +58,9 @@
     unknownType,
     getSummary,
     getThumbnail,
+    summaryContent = undefined,
     summaryId = undefined,
+    hint = undefined,
     /* eslint-enable prefer-const */
   } = $props();
 </script>
@@ -61,28 +68,43 @@
 {#if unknownType}
   <Alert status="warning">{_('unknown_variable_type')}</Alert>
 {:else if expanded}
+  {#if hint}
+    <p class="type-hint">{@html sanitizeHelpText(hint)}</p>
+  {/if}
   {#each subFields as subField (subField.name)}
     <VisibilityObserver>
       <FieldEditor {...getSubFieldProps(subField)} {locale} fieldConfig={subField} />
     </VisibilityObserver>
   {/each}
 {:else}
-  <!-- The summary is only worked out while it’s shown -->
-  {@const summary = getSummary()}
+  <!-- The summary is only worked out while it’s shown, and only if it’s not drawn otherwise -->
+  {@const summary = summaryContent ? '' : getSummary()}
   {@const thumbnail = getThumbnail()}
-  {#if summary || thumbnail}
+  {#if summaryContent || summary || thumbnail}
     <div role="none" class="summary" id={summaryId}>
       {#if thumbnail}
         <Image asset={thumbnail.asset} src={thumbnail.url} variant="icon" cover />
       {/if}
-      <TruncatedText lines={env.isSmallScreen ? 2 : 1}>
-        {summary}
-      </TruncatedText>
+      {#if summaryContent}
+        {@render summaryContent()}
+      {:else}
+        <TruncatedText lines={env.isSmallScreen ? 2 : 1}>
+          {summary}
+        </TruncatedText>
+      {/if}
     </div>
   {/if}
 {/if}
 
 <style>
+  .type-hint {
+    margin: 0 !important;
+    padding: 12px var(--field-editor-padding) 0;
+    font-size: var(--sui-font-size-small);
+    line-height: var(--sui-line-height-compact);
+    color: var(--sui-tertiary-foreground-color);
+  }
+
   .summary {
     display: flex;
     align-items: center;

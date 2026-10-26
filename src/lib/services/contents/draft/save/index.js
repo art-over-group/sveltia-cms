@@ -27,7 +27,7 @@ import { buildCascadeChanges } from '$lib/services/contents/entry/relations/casc
 import { assignAutoNowValues } from '$lib/services/contents/fields/date-time/auto-now';
 import { assignAutoIncrementValues } from '$lib/services/contents/fields/number/auto-increment';
 import { setLastCommitPublishHint } from '$lib/services/deployments';
-import { isWorkflowDraft } from '$lib/services/workflow';
+import { getUnpublishedEntryByDraft, isWorkflowDraft } from '$lib/services/workflow';
 import { detectWorkflowConflict } from '$lib/services/workflow/conflict';
 import { saveWorkflowChanges } from '$lib/services/workflow/save';
 
@@ -43,6 +43,7 @@ import { saveWorkflowChanges } from '$lib/services/workflow/save';
  * InternalCollection,
  * PendingEntry,
  * } from '$lib/types/private';
+ * @import { EntryConflict } from '$lib/services/contents/draft/save/conflict';
  */
 
 /**
@@ -105,7 +106,8 @@ const buildChanges = async ({ draft, slugs, recreate }) => {
 
     changes.push(...cascadeChanges);
 
-    // Moving an entry in a nested collection takes everything below it to the new location
+    // Moving an entry in a collection with nested entries takes everything below it to the new
+    // location
     const { changes: moveChanges, savingEntries: movedEntries } = await buildNestedMoveChanges({
       collection,
       originalEntry,
@@ -145,21 +147,20 @@ const buildChanges = async ({ draft, slugs, recreate }) => {
 };
 
 /**
- * Save the entry draft.
+ * Make sure the entry draft can be saved: it’s editable, its values are valid, and no one else has
+ * changed the entry since the draft was opened, unless the user has said to save over it.
  * @param {object} args Arguments.
  * @param {EntryDraft} args.draft Draft to save.
- * @param {boolean} [args.skipCI] Whether to disable automatic deployments for the change.
- * @param {boolean} [args.overwrite] Whether to save even if someone else has changed the entry
- * since the draft was opened. Without it, such a save is refused with a `save_conflict` error whose
- * `cause` is the conflict found by {@link detectEntryConflict}, so the user can be asked first.
- * An entry stored in a file with the other entries of the collection is still refused if its item
- * has changed, as it’s told by its position, and the item at the position may now be another entry
- * that has moved there.
- * @returns {Promise<Entry>} Saved entry.
- * @throws {Error} When the entry is read-only, could not be validated or saved, or would overwrite
- * someone else’s change.
+ * @param {boolean} args.useWorkflow Whether the changes go to a pull request rather than the
+ * configured branch.
+ * @param {boolean} args.overwrite Whether to save even if someone else has changed the entry.
+ * @param {boolean} args.publish Whether the entry is published along with the save, in which case
+ * its required fields have to be filled in, even if it’s a workflow draft.
+ * @returns {Promise<EntryConflict | undefined>} Conflict found, if any, which the save overwrites.
+ * @throws {Error} When the entry is read-only, could not be validated, or would overwrite someone
+ * else’s change.
  */
-export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }) => {
+const checkSavable = async ({ draft, useWorkflow, overwrite, publish }) => {
   // The editor offers no way to save a read-only entry, but make sure nothing is written anyway
   if (isDraftReadonly(draft)) {
     const { collection, collectionFile } = draft;
@@ -169,15 +170,12 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
     });
   }
 
-  const { isNew, collection, collectionName, fileName, originalEntry } = draft;
-  // A collection can opt in or out of Editorial Workflow on its own, but an entry that already has
-  // a pull request stays in it
-  const useWorkflow = isWorkflowDraft(draft);
-
   // Wait for what was just typed to reach the draft first. Otherwise a save right after typing
   // would validate the field’s previous value, e.g. an empty required field, and the error would
   // clear itself moments later
-  if (!(await validateAndRevealErrors({ draft, enforceRequired: isRequiredEnforced(draft) }))) {
+  const enforceRequired = publish || isRequiredEnforced(draft);
+
+  if (!(await validateAndRevealErrors({ draft, enforceRequired }))) {
     throw new Error('validation_failed');
   }
 
@@ -192,6 +190,17 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
   if (conflict && !overwrite) {
     throw new Error('save_conflict', { cause: conflict });
   }
+
+  return conflict;
+};
+
+/**
+ * Assign the values that are only given when the entry draft is saved: the manual sort order of a
+ * new entry, the auto-increment numbers and the `auto_now` dates.
+ * @param {EntryDraft} draft Draft to save, updated in place.
+ */
+const assignSaveTimeValues = (draft) => {
+  const { isNew, collection, collectionName } = draft;
 
   // The entries added to the same collection from a Relation field have already taken the orders
   // and numbers after the highest ones, so the new entry comes after them
@@ -210,20 +219,16 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
   // Set the DateTime fields with the `auto_now` option at save time rather than when the draft was
   // created, so the value tells when the entry was actually saved
   assignAutoNowValues(draft);
+};
 
-  const slugs = getSlugs({ draft });
-  // Saving over a deletion writes the entry anew, as its files and the assets stored with it are
-  // gone
-  const recreate = conflict?.type === 'deleted';
-
-  const { savingEntry, changes, savingAssets, cascadeEntries, movedEntries } = await buildChanges({
-    draft,
-    slugs,
-    recreate,
-  });
-
-  // The entries created from a Relation field go into the same commit as the entry referring to
-  // them, so neither can end up without the other
+/**
+ * Prepare the commit of the entries created from a Relation field that the entry draft refers to.
+ * They go into the same commit as the entry referring to them, so neither can end up without the
+ * other.
+ * @param {EntryDraft} draft Draft to save.
+ * @returns {Promise<PendingEntry[]>} Pending entries, with their file changes and assets.
+ */
+const preparePendingEntries = async (draft) => {
   /** @type {PendingEntry[]} */
   const pendingEntries = [];
 
@@ -234,17 +239,40 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
     pendingEntries.push(await preparePendingEntryCommit(pendingEntry));
   }
 
-  changes.push(...pendingEntries.flatMap((pendingEntry) => pendingEntry.changes));
-  savingAssets.push(...pendingEntries.flatMap((pendingEntry) => pendingEntry.savingAssets));
+  return pendingEntries;
+};
 
-  const savingPendingEntries = pendingEntries.map((pendingEntry) => pendingEntry.entry);
-  /** @type {ChangeResults} */
-  let results;
-  /** @type {CommitOptions} */
-  const options = { commitType: isNew || recreate ? 'create' : 'update', collection, skipCI };
+/**
+ * Commit the file changes, to a pull request or the configured branch.
+ * @param {object} args Arguments.
+ * @param {EntryDraft} args.draft Draft to save.
+ * @param {boolean} args.useWorkflow Whether the changes go to a pull request rather than the
+ * configured branch.
+ * @param {FileChange[]} args.changes File changes.
+ * @param {Entry} args.savingEntry Entry to save.
+ * @param {Entry[]} args.otherSavingEntries Other entries rewritten or created in the same commit.
+ * @param {PendingEntry[]} args.pendingEntries Entries created from a Relation field, among the
+ * other entries. With Editorial Workflow, they ride along in the entry’s pull request.
+ * @param {Asset[]} args.savingAssets Assets to save.
+ * @param {CommitOptions} args.options Commit options.
+ * @returns {Promise<ChangeResults>} Results.
+ * @throws {Error} A `saving_failed` error when the changes could not be saved, with the original
+ * error as its `cause`, or the cancellation error when the user has cancelled the commit.
+ */
+const commitChanges = async ({
+  draft,
+  useWorkflow,
+  changes,
+  savingEntry,
+  otherSavingEntries,
+  pendingEntries,
+  savingAssets,
+  options,
+}) => {
+  const { collectionName, fileName, originalEntry } = draft;
 
   try {
-    results = useWorkflow
+    return useWorkflow
       ? await saveWorkflowChanges({
           changes,
           savingEntry,
@@ -256,10 +284,14 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
           // collection, so an entry doesn’t take the branch of another with the same file name
           slug: savingEntry.slug,
           originalEntry,
+          companions: pendingEntries.map(({ collectionName: name, entry }) => ({
+            collectionName: name,
+            entry,
+          })),
         })
       : await saveChanges({
           changes,
-          savingEntries: [savingEntry, ...cascadeEntries, ...movedEntries, ...savingPendingEntries],
+          savingEntries: [savingEntry, ...otherSavingEntries],
           savingAssets,
           options,
         });
@@ -274,12 +306,27 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
 
     throw new Error('saving_failed', { cause: ex.cause ?? ex });
   }
+};
+
+/**
+ * Clean up after the entry draft has been saved: delete its backup, call the `postSave` event
+ * hooks and tell the user.
+ * @param {object} args Arguments.
+ * @param {EntryDraft} args.draft Saved draft.
+ * @param {Entry} args.savingEntry Saved entry.
+ * @param {PendingEntry[]} args.pendingEntries Entries created from a Relation field, saved along.
+ * @param {boolean} args.useWorkflow Whether the changes went to a pull request.
+ * @param {boolean | undefined} args.skipCI Whether automatic deployments were disabled.
+ * @param {number} args.count Number of entries saved.
+ */
+const finishSave = async ({ draft, savingEntry, pendingEntries, useWorkflow, skipCI, count }) => {
+  const { isNew, collection, collectionName, originalEntry } = draft;
 
   // Delete the backup as soon as the changes are saved. A dev server that watches the content files
   // may reload the page right after they’re written, e.g. Eleventy, and a backup that outlives the
   // save would then offer to restore a draft that has already been saved. The changes are saved
   // already, so a backup that can’t be deleted doesn’t fail the save. The backup is stored under
-  // the slug the entry had when it was opened, which a rename leaves behind. A backup scheduled for
+  // the path the entry had when it was opened, which a rename leaves behind. A backup scheduled for
   // a change made just before the save is dropped as well: the editor may stay open on the saved
   // draft for a while, e.g. while asking whether to send it for review, and the backup made then
   // would take the place of the one deleted here and be offered the next time the entry is opened
@@ -311,15 +358,88 @@ export const saveEntry = async ({ draft, skipCI = undefined, overwrite = false }
     ),
   );
 
-  updateStores({
-    useWorkflow,
-    skipCI,
-    count: 1 + cascadeEntries.length + movedEntries.length + pendingEntries.length,
-  });
+  updateStores({ useWorkflow, skipCI, count });
 
   if (originalEntry) {
     clearEntryHistoryCache(originalEntry.id);
   }
+};
+
+/**
+ * Save the entry draft.
+ * @param {object} args Arguments.
+ * @param {EntryDraft} args.draft Draft to save.
+ * @param {boolean} [args.skipCI] Whether to disable automatic deployments for the change.
+ * @param {boolean} [args.overwrite] Whether to save even if someone else has changed the entry
+ * since the draft was opened. Without it, such a save is refused with a `save_conflict` error whose
+ * `cause` is the conflict found by {@link detectEntryConflict}, so the user can be asked first.
+ * An entry stored in a file with the other entries of the collection is still refused if its item
+ * has changed, as it’s told by its position, and the item at the position may now be another entry
+ * that has moved there.
+ * @param {boolean} [args.publish] Whether to publish the entry along with the save, bypassing the
+ * review: see the `direct_publish` publish mode option. A workflow draft without a pull request is
+ * then committed straight to the configured branch. One with a pull request is still saved to it,
+ * as the pull request may hold earlier changes too, and it’s up to the caller to merge it.
+ * @returns {Promise<Entry>} Saved entry.
+ * @throws {Error} When the entry is read-only, could not be validated or saved, or would overwrite
+ * someone else’s change.
+ */
+export const saveEntry = async ({
+  draft,
+  skipCI = undefined,
+  overwrite = false,
+  publish = false,
+}) => {
+  // A collection can opt in or out of Editorial Workflow on its own, but an entry that already has
+  // a pull request stays in it
+  const useWorkflow = publish ? !!getUnpublishedEntryByDraft(draft) : isWorkflowDraft(draft);
+  const conflict = await checkSavable({ draft, useWorkflow, overwrite, publish });
+
+  assignSaveTimeValues(draft);
+
+  const slugs = getSlugs({ draft });
+  // Saving over a deletion writes the entry anew, as its files and the assets stored with it are
+  // gone
+  const recreate = conflict?.type === 'deleted';
+
+  const { savingEntry, changes, savingAssets, cascadeEntries, movedEntries } = await buildChanges({
+    draft,
+    slugs,
+    recreate,
+  });
+
+  const pendingEntries = await preparePendingEntries(draft);
+
+  changes.push(...pendingEntries.flatMap((pendingEntry) => pendingEntry.changes));
+  savingAssets.push(...pendingEntries.flatMap((pendingEntry) => pendingEntry.savingAssets));
+
+  const results = await commitChanges({
+    draft,
+    useWorkflow,
+    changes,
+    savingEntry,
+    otherSavingEntries: [
+      ...cascadeEntries,
+      ...movedEntries,
+      ...pendingEntries.map((pendingEntry) => pendingEntry.entry),
+    ],
+    pendingEntries,
+    savingAssets,
+    options: {
+      commitType: draft.isNew || recreate ? 'create' : 'update',
+      collection: draft.collection,
+      skipCI,
+    },
+  });
+
+  await finishSave({
+    draft,
+    savingEntry,
+    pendingEntries,
+    useWorkflow,
+    skipCI,
+    count: 1 + cascadeEntries.length + movedEntries.length + pendingEntries.length,
+  });
 
   return results.savedEntries[0];
 };

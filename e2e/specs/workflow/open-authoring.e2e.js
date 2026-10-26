@@ -1,7 +1,7 @@
 import { OPEN_AUTHORING_CONFIG, post, saveForkDraft } from '../../fixtures/configs/workflow.js';
 import { createPNG } from '../../fixtures/files.js';
 import { expect, test } from '../../fixtures/test.js';
-import { getEditor, openEntry } from '../../fixtures/ui.js';
+import { getEditor, getEntryRows, openEntry } from '../../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -65,9 +65,7 @@ test.describe('as a contributor', () => {
     await expect(
       page.getByText(/Your changes are saved to your fork .*mona\/e2e-site/),
     ).toBeVisible();
-    await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-      /First Post/,
-    ]);
+    await expect(getEntryRows(page)).toHaveText([/First Post/]);
     expect(github.fork).toEqual({ owner: 'mona', repo: 'e2e-site' });
   });
 
@@ -84,9 +82,7 @@ test.describe('as a contributor', () => {
     await expect(page.getByText(/Your changes are saved to your fork/)).toBeVisible({
       timeout: 10_000,
     });
-    await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-      /First Post/,
-    ]);
+    await expect(getEntryRows(page)).toHaveText([/First Post/]);
     expect(github.forkPendingRequests).toBe(0);
   });
 
@@ -281,10 +277,7 @@ test.describe('as a contributor', () => {
 
       await cms.open();
 
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-        /Third Post/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Third Post/]);
       await expect.poll(() => github.refs.get('mona:main')).toBe(github.head.oid);
       await expect(page.getByRole('alertdialog', { name: 'Fork Repository' })).toHaveCount(0);
     });
@@ -310,7 +303,7 @@ test.describe('as a contributor', () => {
       ]);
       expect(github.head.oid).toBe(mainBefore);
       expect(github.pullRequests).toEqual([]);
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+      await expect(getEntryRows(page)).toHaveText([
         /Unpublished Entries/,
         /Second Post.*Draft/,
         /Published Entries/,
@@ -329,10 +322,7 @@ test.describe('as a contributor', () => {
 
       await cms.open();
 
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-        /Third Post/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Third Post/]);
       expect(github.readFile('content/posts/third-post.md', github.forkBranch('main'))).toBe(
         undefined,
       );
@@ -348,6 +338,115 @@ test.describe('as a contributor', () => {
         post('Third Post', 'From Alex.'),
       );
       expect(github.readFile('notes.md', branch)).toBeUndefined();
+    });
+
+    test('starts a branch from the fork when it lacks workflow files changed in the repository', async ({
+      cms,
+      github,
+      page,
+    }) => {
+      const { oid: forkHead } = github.head;
+
+      // GitHub refuses a sign-in without the `workflow` scope to bring the new workflow file into
+      // the fork, both when syncing it and when branching from the repository’s head
+      github.commit({ '.github/workflows/deploy.yml': 'on: push' });
+
+      await cms.open();
+      await expect(getEntryRows(page)).toHaveText([/First Post/]);
+      expect(github.refs.get(github.forkBranch('main'))).toBe(forkHead);
+
+      await page.getByRole('button', { name: 'Create New Entry' }).first().click();
+
+      const editor = getEditor(page);
+
+      await editor.getByRole('textbox', { name: 'Title' }).fill('Second Post');
+      await editor.getByRole('textbox', { name: 'Body' }).fill('Coming soon.');
+      await editor.getByRole('button', { name: 'Save' }).click();
+      await page
+        .getByRole('alertdialog', { name: 'Send for Review' })
+        .getByRole('button', { name: 'Send for Review' })
+        .click();
+
+      const branch = github.forkBranch(SECOND_POST_BRANCH);
+
+      await expect
+        .poll(() => github.pullRequests)
+        .toMatchObject([{ head: branch, state: 'open', draft: false }]);
+      expect(github.readFile('content/posts/second-post.md', branch)).toBe(
+        post('Second Post', 'Coming soon.'),
+      );
+      expect(github.getHead(branch).parents).toEqual([forkHead]);
+      expect(github.readFile('.github/workflows/deploy.yml', branch)).toBeUndefined();
+      // The pull request only holds the entry, as the branch is behind rather than ahead
+      expect(github.getPullRequestFiles(github.pullRequests[0])).toEqual([
+        { path: 'content/posts/second-post.md', changeType: 'ADDED' },
+      ]);
+      await expect(getEntryRows(page)).toHaveText([
+        /Unpublished Entries/,
+        /Second Post.*In Review/,
+        /Published Entries/,
+        /First Post/,
+      ]);
+    });
+
+    test.describe('with a configured branch the fork doesn’t have', () => {
+      test.use({
+        config: {
+          ...OPEN_AUTHORING_CONFIG,
+          backend: { ...OPEN_AUTHORING_CONFIG.backend, branch: 'preview' },
+        },
+      });
+
+      test('starts a branch from the fork’s default branch when the head upstream is refused', async ({
+        cms,
+        github,
+        page,
+      }) => {
+        const { oid: forkHead } = github.head;
+
+        // The branch was created upstream after the fork was made, e.g. for a deploy preview, and
+        // has a workflow file the fork lacks
+        github.createBranch('preview', github.head.oid);
+        github.commit({ '.github/workflows/deploy.yml': 'on: push' }, { branch: 'preview' });
+
+        await cms.open();
+        await expect(getEntryRows(page)).toHaveText([/First Post/]);
+        expect(github.refs.has(github.forkBranch('preview'))).toBe(false);
+
+        await saveSecondPost(page);
+
+        const branch = github.forkBranch(SECOND_POST_BRANCH);
+
+        await expect
+          .poll(() => github.readFile('content/posts/second-post.md', branch))
+          .toBe(post('Second Post', 'Coming soon.'));
+        expect(github.getHead(branch).parents).toEqual([forkHead]);
+      });
+
+      test('leaves out what the fork’s default branch has on top of where it meets the branch', async ({
+        cms,
+        github,
+        page,
+      }) => {
+        const { oid: mergeBase } = github.head;
+
+        github.createBranch('preview', github.head.oid);
+        github.commit({ '.github/workflows/deploy.yml': 'on: push' }, { branch: 'preview' });
+        // A commit the configured branch doesn’t have, as with a fork of its own or a default
+        // branch that has moved on from the configured one
+        github.commit({ 'notes.md': 'Mine.' }, { branch: github.forkBranch('main') });
+
+        await cms.open();
+        await saveSecondPost(page);
+
+        const branch = github.forkBranch(SECOND_POST_BRANCH);
+
+        await expect
+          .poll(() => github.readFile('content/posts/second-post.md', branch))
+          .toBe(post('Second Post', 'Coming soon.'));
+        expect(github.getHead(branch).parents).toEqual([mergeBase]);
+        expect(github.readFile('notes.md', branch)).toBeUndefined();
+      });
     });
 
     test('saves again to the same branch in the fork', async ({ cms, github, page }) => {
@@ -438,7 +537,7 @@ test.describe('as a contributor', () => {
         .toMatchObject([
           { head: github.forkBranch(SECOND_POST_BRANCH), state: 'open', draft: false, labels: [] },
         ]);
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+      await expect(getEntryRows(page)).toHaveText([
         /Unpublished Entries/,
         /Second Post.*In Review/,
         /Published Entries/,
@@ -545,10 +644,7 @@ test.describe('as a contributor', () => {
       await cms.open();
 
       // The published entry has a draft again, which stands in for it
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-        /Second Post.*Draft/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post.*Draft/]);
       await openEntry(page, 'Second Post');
       await cms.chooseMenuItem(
         page.getByRole('button', { name: /Status: .*Draft/ }),
@@ -602,10 +698,10 @@ test.describe('as a contributor', () => {
       await expect.poll(() => github.refs.has(branch)).toBe(false);
       // The editor closes onto the entry list, where the entry is published rather than a draft
       await expect(getEditor(page)).toBeHidden();
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-        /^\s*Second Post\s*$/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
+      await expect(
+        page.getByRole('row', { name: /^Second Post/ }).locator('.status-badge'),
+      ).toHaveCount(0);
     });
 
     test('keeps unsaved changes to an entry published since the board was loaded', async ({
@@ -654,6 +750,42 @@ test.describe('as a contributor', () => {
       await expect.poll(() => github.refs.has(branch)).toBe(true);
       expect(github.pullRequests.map(({ state }) => state)).toEqual(['merged']);
       expect(github.readFile('content/posts/second-post.md', branch)).toContain('Now with more.');
+    });
+
+    test('takes an entry published by a maintainer off the list on the next check', async ({
+      cms,
+      github,
+      page,
+    }) => {
+      const branch = saveForkDraft(github, {
+        slug: 'second-post',
+        files: { 'content/posts/second-post.md': post('Second Post', 'Coming soon.') },
+      });
+
+      const pullRequest = github.openPullRequest({
+        title: 'Create Post “second-post”',
+        head: branch,
+        author: github.user,
+      });
+
+      await page.clock.install();
+      await cms.open();
+      await expect(getEntryRows(page)).toHaveText([
+        /Unpublished Entries/,
+        /Second Post/,
+        /Published Entries/,
+        /First Post/,
+      ]);
+
+      // The merge moves the configured branch, which the next check notices, so the entries in the
+      // fork are listed again right away
+      github.mergePullRequest(pullRequest);
+      await page.clock.fastForward('01:01');
+
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
+      await expect(
+        page.getByRole('row', { name: /^Second Post/ }).locator('.status-badge'),
+      ).toHaveCount(0);
     });
 
     test('sends a draft for review with a pull request from the fork', async ({
@@ -723,7 +855,7 @@ test.describe('as a contributor', () => {
       await cms.open();
 
       // The entry is still a draft, rather than being taken for one in review
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+      await expect(getEntryRows(page)).toHaveText([
         /Unpublished Entries/,
         /Second Post.*Draft/,
         /Published Entries/,
@@ -830,9 +962,7 @@ test.describe('as a contributor', () => {
       await expect.poll(() => pullRequest.state).toBe('closed');
       await expect.poll(() => github.refs.has(branch)).toBe(false);
       expect(github.head.oid).toBe(mainBefore);
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/]);
     });
 
     test('deletes the branch of a pull request a maintainer has merged', async ({
@@ -855,10 +985,7 @@ test.describe('as a contributor', () => {
 
       await cms.open();
 
-      await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-        /First Post/,
-        /Second Post/,
-      ]);
+      await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
       await expect.poll(() => github.refs.has(branch)).toBe(false);
     });
   });

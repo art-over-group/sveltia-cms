@@ -4,10 +4,13 @@ import { fetchAliasedBatch } from '$lib/services/backends/git/github/graphql';
 import { repository } from '$lib/services/backends/git/github/repository';
 import { fetchAPI, fetchGraphQL } from '$lib/services/backends/git/shared/api';
 import { runConcurrently } from '$lib/services/backends/git/shared/concurrency';
-import { PULL_REQUEST_DESCRIPTION } from '$lib/services/backends/git/shared/pull-requests';
+import {
+  parseRestFiles,
+  PULL_REQUEST_DESCRIPTION,
+} from '$lib/services/backends/git/shared/pull-requests';
 import { deleteRemoteBranch } from '$lib/services/backends/git/shared/workflow';
 import { encodePathSegments } from '$lib/services/utils/url';
-import { getAllStatusLabels, getStatusLabel } from '$lib/services/workflow/labels';
+import { getStatusLabel, replaceStatusLabel } from '$lib/services/workflow/labels';
 import { forkedRepository } from '$lib/services/workflow/open-authoring';
 
 /**
@@ -48,21 +51,6 @@ export const parseFileNodes = (nodes) =>
   }));
 
 /**
- * Convert the changed files of a pull request or comparison, as listed by the REST API, to workflow
- * files.
- * @param {Record<string, any>[]} files Files.
- * @returns {WorkflowFile[]} Files.
- */
-export const parseRestFiles = (files) =>
-  files.map(({ filename, status, previous_filename: previousPath }) => ({
-    path: filename,
-    sha: '',
-    size: 0,
-    deleted: status === 'removed',
-    previousPath,
-  }));
-
-/**
  * Re-fetch the list of files changed in the given pull request with the REST API, which is the only
  * one that reports the path a renamed file had before. The GraphQL API used by
  * `fetchPullRequests()` has a `RENAMED` change type but no matching previous-path field, so
@@ -80,7 +68,7 @@ export const fetchPullRequestFileList = async (pullRequest) => {
     )
   );
 
-  pullRequest.files = parseRestFiles(files);
+  pullRequest.files = parseRestFiles(files, { removedStatus: 'removed' });
 };
 
 /**
@@ -227,7 +215,6 @@ export const deleteBranch = async (branch) => {
  */
 export const updateLabels = async (pullRequest, status) => {
   const { owner, repo } = repository;
-  const cmsLabels = getAllStatusLabels();
 
   // Read the labels from the pulls endpoint: the issues endpoint's `GET` needs issue access, which
   // a fine-grained token created from the token page doesn't have, while its `PATCH` also accepts
@@ -236,10 +223,10 @@ export const updateLabels = async (pullRequest, status) => {
     await fetchAPI(`/repos/${owner}/${repo}/pulls/${pullRequest.number}`)
   );
 
-  const newLabels = [
-    ...labels.map(({ name }) => name).filter((name) => !cmsLabels.includes(name)),
-    getStatusLabel(status),
-  ];
+  const newLabels = replaceStatusLabel(
+    labels.map(({ name }) => name),
+    status,
+  );
 
   await fetchAPI(`/repos/${owner}/${repo}/issues/${pullRequest.number}`, {
     method: 'PATCH',
@@ -328,18 +315,4 @@ export const createPullRequest = async ({ branch, title, status }) => {
   }
 
   return pullRequest;
-};
-
-/**
- * Reopen a pull request that was closed earlier.
- * @param {WorkflowPullRequest} pullRequest Pull request.
- * @see https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
- */
-export const reopenPullRequest = async (pullRequest) => {
-  const { owner, repo } = repository;
-
-  await fetchAPI(`/repos/${owner}/${repo}/pulls/${pullRequest.number}`, {
-    method: 'PATCH',
-    body: { state: 'open' },
-  });
 };

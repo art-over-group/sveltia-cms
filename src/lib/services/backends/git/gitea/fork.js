@@ -5,12 +5,14 @@ import {
   repository,
 } from '$lib/services/backends/git/gitea/repository';
 import { fetchAPI } from '$lib/services/backends/git/shared/api';
+import { fetchAPIOrUndefined } from '$lib/services/backends/git/shared/api-optional';
 import {
   createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createNoAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
   isOpenAuthoringConfiguredFor,
+  requestForkWithFallbackName,
   resolveWorkflowRepository,
   runOpenAuthoringSetUp,
   setUpForkFor,
@@ -78,9 +80,7 @@ export const fetchRepositoryAccess = async () => {
     // same as the regular access check does, so the user gets the sign-in form rather than the
     // same error on every reload
     if ([403, 404].includes(ex.cause?.status)) {
-      throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', {
-        repo: repoPath,
-      });
+      throw createNoAccessError(repoPath);
     }
 
     // A rate limit or an outage leaves the question unanswered. Reading that as “no write access”
@@ -107,15 +107,16 @@ export const fetchForkByName = async () => {
   const { owner, repo } = repository;
   const userName = /** @type {string} */ (user.account?.login);
 
-  const response = /** @type {Response} */ (
-    await fetchAPI(`/repos/${encodeURIComponent(userName)}/${repo}`, { responseType: 'raw' })
+  // Only a missing repository means there’s no fork at the name. Reading a rate limit or an outage
+  // the same way would have the contributor asked to create another one, so that is passed on
+  const result = /** @type {Record<string, any> | undefined} */ (
+    await fetchAPIOrUndefined(`/repos/${encodeURIComponent(userName)}/${repo}`)
   );
 
-  if (!response.ok) {
+  if (!result) {
     return undefined;
   }
 
-  const result = await response.json();
   const parent = result.parent?.full_name?.toLowerCase();
 
   if (!result.fork || parent !== `${owner}/${repo}`.toLowerCase()) {
@@ -134,8 +135,8 @@ export const fetchForkByName = async () => {
 
 /**
  * Look through the forks the signed-in user owns for one of the configured repository, wherever
- * it’s named. This only runs when {@link fetchForkByName} came up empty, so its worst case is the
- * behavior without it: no fork found, and the contributor asked whether to make one.
+ * it’s named. This only runs when {@link fetchForkByName} came up empty. A failed search is passed
+ * on rather than taken for no fork, which would have the contributor asked to create another one.
  * @returns {Promise<RepositoryPath | undefined>} The fork, or `undefined` if there is none.
  * @see https://docs.gitea.com/api/next/#tag/repository/operation/repoSearch
  */
@@ -145,22 +146,18 @@ export const fetchForkBySearch = async () => {
   const { id, login } = /** @type {User} */ (user.account);
   const repoPath = `${owner}/${repo}`.toLowerCase();
 
-  try {
-    const { data = [] } = /** @type {{ data?: Record<string, any>[] }} */ (
-      await fetchAPI(`/repos/search?uid=${id}&exclusive=true&mode=fork&limit=${MAX_FORKS}`)
-    );
+  const { data = [] } = /** @type {{ data?: Record<string, any>[] }} */ (
+    await fetchAPI(`/repos/search?uid=${id}&exclusive=true&mode=fork&limit=${MAX_FORKS}`)
+  );
 
-    const result = data.find(
-      (item) =>
-        // Check the owner rather than trusting the filter to have applied: committing to someone
-        // else’s fork would fail in a way that’s hard to make sense of
-        item.owner?.login === login && item.parent?.full_name?.toLowerCase() === repoPath,
-    );
+  const result = data.find(
+    (item) =>
+      // Check the owner rather than trusting the filter to have applied: committing to someone
+      // else’s fork would fail in a way that’s hard to make sense of
+      item.owner?.login === login && item.parent?.full_name?.toLowerCase() === repoPath,
+  );
 
-    return result ? toRepositoryPath(result) : undefined;
-  } catch {
-    return undefined;
-  }
+  return result ? toRepositoryPath(result) : undefined;
 };
 
 /**
@@ -217,41 +214,31 @@ const isRepositoryNameTaken = async (name) => {
  */
 export const createFork = async () => {
   const { owner, repo } = repository;
-  const repoPath = `${owner}/${repo}`;
   const endpoint = `/repos/${owner}/${repo}/forks`;
-  /** @type {Record<string, any>} */
-  let result;
 
-  try {
-    result = /** @type {Record<string, any>} */ (
-      await fetchAPI(endpoint, { method: 'POST', body: {} })
-    );
-  } catch (/** @type {any} */ ex) {
+  const result = await requestForkWithFallbackName({
+    repoPath: `${owner}/${repo}`,
+    /**
+     * Request a fork at the default name.
+     * @returns {Promise<any>} New fork.
+     */
+    requestFork: () => fetchAPI(endpoint, { method: 'POST', body: {} }),
+    /**
+     * Request a fork named after the configured repository’s owner and name.
+     * @returns {Promise<any>} New fork.
+     */
+    requestRenamedFork: () =>
+      fetchAPI(endpoint, { method: 'POST', body: { name: `${owner}-${repo}` } }),
     // The instance doesn’t pick another name when the contributor already has an unrelated
     // repository of the same name, the way GitHub does, so give it one. Any other failure is real:
     // a fork of the repository already exists, or forking is turned off on the instance
-    if (ex.cause?.status !== 409 || !(await isRepositoryNameTaken(repo))) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fork the repository.', ex);
-
-      throw createLocalizedError('Failed to fork the repository.', 'open_authoring.fork_failed', {
-        repo: repoPath,
-      });
-    }
-
-    try {
-      result = /** @type {Record<string, any>} */ (
-        await fetchAPI(endpoint, { method: 'POST', body: { name: `${owner}-${repo}` } })
-      );
-    } catch (/** @type {any} */ retryEx) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fork the repository.', retryEx);
-
-      throw createLocalizedError('Failed to fork the repository.', 'open_authoring.fork_failed', {
-        repo: repoPath,
-      });
-    }
-  }
+    conflictStatuses: [409],
+    /**
+     * Check whether the contributor has a repository at the default name.
+     * @returns {Promise<boolean>} `true` if the name is taken.
+     */
+    isNameTaken: () => isRepositoryNameTaken(repo),
+  });
 
   return toRepositoryPath(result);
 };

@@ -1,16 +1,29 @@
 <script>
   import { _ } from '@sveltia/i18n';
-  import { Alert } from '@sveltia/ui';
+  import { Alert, TextInput } from '@sveltia/ui';
 
   import PrefSwitch from '$lib/components/settings/controls/pref-switch.svelte';
   import { backendName } from '$lib/services/backends';
   import { getLocalGitStatusLabel } from '$lib/services/backends/fs/git/messages';
   import { checkLocalGitStatus } from '$lib/services/backends/fs/local';
+  import { skipCIConfigured } from '$lib/services/backends/git/shared/integration';
   import { prefs } from '$lib/services/user/prefs.svelte';
 
   /**
-   * @import { LocalGitStatus } from '$lib/types/private';
+   * @import { LocalGitStatus, SettingsPanelOnChangeArgs } from '$lib/types/private';
    */
+
+  /**
+   * @typedef {object} Props
+   * @property {(detail: SettingsPanelOnChangeArgs) => void} [onChange] `change` event handler.
+   */
+
+  /** @type {Props} */
+  let {
+    /* eslint-disable prefer-const */
+    onChange = undefined,
+    /* eslint-enable prefer-const */
+  } = $props();
 
   /**
    * Check whether the saved changes can be committed to the local Git repository. The Settings are
@@ -19,6 +32,26 @@
    */
   const getLocalGitStatus = async () => /** @type {LocalGitStatus} */ (await checkLocalGitStatus());
 </script>
+
+{#snippet deployHookInput(
+  /** @type {'deployHookURL' | 'deployHookAuthHeader'} */ prop,
+  /** @type {string} */ ariaLabel,
+  /** @type {string} */ savedMessage,
+  /** @type {string} */ removedMessage,
+)}
+  <div role="none">
+    <TextInput
+      dir="ltr"
+      bind:value={prefs[prop]}
+      flex
+      {ariaLabel}
+      showInlineLabel={true}
+      onchange={() => {
+        onChange?.({ message: prefs[prop] ? savedMessage : removedMessage });
+      }}
+    />
+  </div>
+{/snippet}
 
 <section>
   <h3>
@@ -61,5 +94,27 @@
         {/await}
       </div>
     {/if}
+  </section>
+{/if}
+{#if skipCIConfigured.current}
+  <section>
+    <h3>
+      {_('prefs.developer.deploy_hook.title')}
+    </h3>
+    <p>
+      {_('prefs.developer.deploy_hook.description')}
+    </p>
+    {@render deployHookInput(
+      'deployHookURL',
+      _('prefs.developer.deploy_hook.url.field_label'),
+      _('prefs.developer.deploy_hook.url.saved'),
+      _('prefs.developer.deploy_hook.url.removed'),
+    )}
+    {@render deployHookInput(
+      'deployHookAuthHeader',
+      _('prefs.developer.deploy_hook.auth.field_label'),
+      _('prefs.developer.deploy_hook.auth.saved'),
+      _('prefs.developer.deploy_hook.auth.removed'),
+    )}
   </section>
 {/if}

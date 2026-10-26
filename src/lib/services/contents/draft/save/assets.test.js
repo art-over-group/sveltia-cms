@@ -34,6 +34,7 @@ vi.mock('$lib/services/utils/file', async (importOriginal) => ({
 
 vi.mock('$lib/services/assets/file-name', () => ({
   formatFileName: vi.fn((name) => name.toLowerCase()),
+  isSameFileName: vi.fn((name1, name2) => name1.toLowerCase() === name2.toLowerCase()),
 }));
 vi.mock('$lib/services/contents/draft/slugs', () => ({
   getFillSlugOptions: vi.fn(() => ({ content: {}, collection: {} })),
@@ -209,7 +210,7 @@ describe('Test resolveAssetFolderPaths()', () => {
     });
   });
 
-  test('nested collection, absolute media and public folders with the entry’s folder', async () => {
+  test('nested entries, absolute media and public folders with the entry’s folder', async () => {
     // @see https://github.com/decaporg/decap-cms/issues/7752
     /** @type {any} */
     const collection = {
@@ -1633,7 +1634,7 @@ describe('Test resolveAssetFolderPaths()', () => {
     expect(result.resolvedInternalPath).toBeDefined();
   });
 
-  describe('nested collection without a `path` option', () => {
+  describe('nested entries without a `path` option', () => {
     const pagesFolder = {
       collectionName: 'pages',
       entryRelative: true,
@@ -1644,7 +1645,7 @@ describe('Test resolveAssetFolderPaths()', () => {
     };
 
     /**
-     * Create a nested collection that stores every entry as an index file.
+     * Create a collection with nested entries that stores every entry as an index file.
      * @param {object} [options] Options.
      * @param {boolean} [options.subfolders] Whether the collection uses the `subfolders` mode.
      * @param {InternalI18nOptions} [options.i18n] I18n options.
@@ -1779,6 +1780,49 @@ describe('Test replaceBlobURL()', () => {
     expect(content.image).toBe('/images/test-image.jpg');
     expect(changes).toHaveLength(1);
     expect(savingAssets).toHaveLength(1);
+  });
+
+  test('should count the file as prepared', async () => {
+    const { saveProgress, startPreparing, clearSaveProgress } =
+      await import('$lib/services/backends/commit-progress');
+
+    const blobURL = 'blob:http://localhost:5173/abc-123';
+
+    startPreparing(2);
+
+    await replaceBlobURL(
+      /** @type {any} */ ({
+        file: new File(['test content'], 'photo.jpg', { type: 'image/jpeg' }),
+        folder: createMockAssetFolder({
+          collectionName: 'posts',
+          internalPath: 'static/images',
+          publicPath: '/images',
+        }),
+        replace: false,
+        blobURL,
+        draft: {
+          collection: {
+            _type: 'entry',
+            _i18n: { defaultLocale: 'en' },
+            _file: { basePath: 'posts' },
+            _assetFolder: { fields: [] },
+          },
+          collectionName: 'posts',
+          isIndexFile: false,
+          currentValues: { en: { title: 'Test' } },
+          currentSlugs: { en: 'test-post' },
+        },
+        defaultLocaleSlug: 'test-post',
+        keyPath: 'image',
+        content: { image: blobURL },
+        changes: [],
+        savingAssets: [],
+        encodingEnabled: false,
+      }),
+    );
+
+    expect(saveProgress.current).toMatchObject({ phase: 'preparing', done: 1, total: 2 });
+    clearSaveProgress();
   });
 
   test('should insert a public URL containing `$` patterns verbatim', async () => {
@@ -2812,6 +2856,59 @@ describe('Test replaceBlobURL()', () => {
     vi.mocked(formatFileName).mockImplementation((name) => name.toLowerCase());
   });
 
+  test('should not save a replacing file under the name of an identical file in the same save', async () => {
+    const { getAssetsByDirName } = await import('$lib/services/assets');
+    const { getGitHash } = await import('$lib/services/utils/file');
+    const tinyFile = new File(['same'], 'tiny.webp', { type: 'image/webp' });
+    const thumbFile = new File(['same'], 'thumb.webp', { type: 'image/webp' });
+
+    vi.mocked(getAssetsByDirName).mockReturnValue(/** @type {any} */ ([{ name: 'thumb.webp' }]));
+    vi.mocked(getGitHash).mockResolvedValue('sha-same');
+
+    /** @type {any} */
+    const draft = {
+      collection: {
+        _type: 'entry',
+        _i18n: { defaultLocale: 'en' },
+        _file: { basePath: 'posts' },
+        _assetFolder: { fields: [] },
+      },
+      collectionName: 'posts',
+      isIndexFile: false,
+      currentValues: { en: { title: 'Test' } },
+      currentSlugs: { en: 'test-post' },
+    };
+
+    const content = { tiny: 'blob:tiny', thumb: 'blob:thumb' };
+    /** @type {any[]} */
+    const changes = [];
+
+    const args = {
+      folder: createMockAssetFolder({
+        collectionName: 'posts',
+        internalPath: 'static/images',
+        publicPath: '/images',
+      }),
+      replace: true,
+      draft,
+      defaultLocaleSlug: 'test-post',
+      content,
+      changes,
+      savingAssets: [],
+      encodingEnabled: false,
+    };
+
+    await replaceBlobURL({ ...args, file: tinyFile, blobURL: 'blob:tiny', keyPath: 'tiny' });
+    await replaceBlobURL({ ...args, file: thumbFile, blobURL: 'blob:thumb', keyPath: 'thumb' });
+
+    // Each file keeps the fixed name it was given, even though the contents are the same
+    expect(changes.map(({ action, path }) => ({ action, path }))).toEqual([
+      { action: 'create', path: 'static/images/tiny.webp' },
+      { action: 'update', path: 'static/images/thumb.webp' },
+    ]);
+    expect(content).toEqual({ tiny: '/images/tiny.webp', thumb: '/images/thumb.webp' });
+  });
+
   test('should only replace an existing file with the first of the same-named files in the same save', async () => {
     const { getAssetsByDirName } = await import('$lib/services/assets');
     const { getGitHash } = await import('$lib/services/utils/file');
@@ -3619,7 +3716,7 @@ describe('Test getOwnedEntryFolderPath()', () => {
     );
   });
 
-  test('returns the folder holding the index file of a nested collection', () => {
+  test('returns the folder holding the index file of a collection with nested entries', () => {
     const collection = createCollection({
       nested: { depth: 100 },
       meta: { path: { index_file: '_index' } },

@@ -1,3 +1,4 @@
+import { METADATA_KEYS } from '$lib/services/contents/collection/view/table-keys';
 import { DEFAULT_CANONICAL_SLUG } from '$lib/services/contents/i18n/config/constants';
 import { mergeI18nConfigs } from '$lib/services/contents/i18n/config/merge';
 import { isNumeric } from '$lib/services/utils/number';
@@ -17,14 +18,6 @@ import { isNumeric } from '$lib/services/utils/number';
  * ListFieldWithSubField,
  * } from '$lib/types/public';
  */
-
-/**
- * Entry metadata property keys that can be used in the `filter`, `sortable_fields`, `view_groups`
- * and `view_filters` options in place of a field key path. These are resolved by
- * `getPropertyValue()` from the entry itself rather than the collection’s `fields`.
- * @type {string[]}
- */
-export const METADATA_KEYS = ['slug', 'commit_author', 'commit_date'];
 
 /**
  * Get the canonical slug key of the given collection or file. When i18n is enabled, the key —
@@ -156,3 +149,20 @@ export const getRootFields = ({ collection, collectionFile, isIndexFile }) => {
 
   return fields;
 };
+
+/**
+ * Check if the given sort key can be used without referring to a field, in the `sortable_fields`
+ * option of a collection or the `sort_by` option of a Relation field: an entry metadata key like
+ * `slug`, `_manual` for the manual order, the canonical slug key, which is part of the content
+ * without being a field, or the reorder field, which may not be defined under `fields`.
+ * @param {string} key Sort key.
+ * @param {object} args Arguments.
+ * @param {string | undefined} args.canonicalSlugKey Canonical slug key of the collection.
+ * @param {string | undefined} args.orderFieldKey Reorder field key of the collection.
+ * @returns {boolean} Result.
+ */
+export const isNonFieldSortKey = (key, { canonicalSlugKey, orderFieldKey }) =>
+  METADATA_KEYS.includes(key) ||
+  key === '_manual' ||
+  key === canonicalSlugKey ||
+  key === orderFieldKey;

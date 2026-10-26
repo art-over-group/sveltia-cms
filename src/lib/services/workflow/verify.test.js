@@ -11,6 +11,7 @@ import { unpublishedEntries } from '$lib/services/workflow';
 import {
   findUnexpectedChanges,
   getWorkflowErrorMessage,
+  pinReviewedHead,
   PUBLISH_REFUSED,
   verifyMergeState,
 } from '$lib/services/workflow/verify';
@@ -179,6 +180,19 @@ describe('workflow/verify', () => {
         'static/CMS/app.js',
         'static/admin/old.js',
       ]);
+    });
+
+    test('flags the admin page or its configuration in a folder named like the CMS one', () => {
+      // Deeper down, only the files that would take over the CMS are flagged; other assets in a
+      // folder like a Hugo page bundle with the `cms` slug are the entry’s
+      expect(
+        findUnexpectedChanges(createEntry(), [
+          { path: 'static/docs/admin/index.html', status: 'added', mode: '100644' },
+          { path: 'static/docs/cms/config.yml', status: 'modified', mode: '100644' },
+          { path: 'static/docs/admin/logo.png', status: 'added', mode: '100644' },
+          { path: 'static/posts/cms/cover.jpg', status: 'added', mode: '100644' },
+        ]),
+      ).toEqual(['static/docs/admin/index.html', 'static/docs/cms/config.yml']);
     });
 
     test('leaves deployment configuration edited as an entry to the entry rules', () => {
@@ -381,14 +395,40 @@ describe('workflow/verify', () => {
       expect(collectRenameTargets).not.toHaveBeenCalled();
     });
 
-    test('flags a new entry in another collection', () => {
-      // A Relation field doesn’t offer to add an entry while an entry is saved through Editorial
-      // Workflow, so the CMS never commits one along with it
+    test('flags a new entry in another collection the board doesn’t show', () => {
       expect(
         findUnexpectedChanges(createEntry(), [
           { path: 'content/authors/me.md', status: 'added', mode: '100644' },
         ]),
       ).toEqual(['content/authors/me.md']);
+    });
+
+    test('allows the new entries listed on the entry’s card, as long as they’re new', () => {
+      // They were created from a Relation field of the entry and committed along with it
+      // @see https://github.com/sveltia/sveltia-cms/issues/1112
+      const entry = createEntry();
+
+      entry.workflow.companions = [
+        {
+          collectionName: 'authors',
+          entry: createPublishedEntry('me', ['content/authors/me.md', 'content/authors/ja/me.md']),
+        },
+      ];
+
+      expect(
+        findUnexpectedChanges(entry, [
+          { path: 'content/authors/me.md', status: 'added', mode: '100644' },
+          { path: 'content/authors/ja/me.md', status: 'added', mode: '100644' },
+        ]),
+      ).toEqual([]);
+
+      // One that has appeared on the configured branch since would be overwritten
+      expect(
+        findUnexpectedChanges(entry, [
+          { path: 'content/authors/me.md', status: 'modified', mode: '100644' },
+          { path: 'content/authors/ja/me.md', status: 'removed' },
+        ]),
+      ).toEqual(['content/authors/me.md', 'content/authors/ja/me.md']);
     });
 
     test('allows a nested entry to move the entries below its folder along with it', () => {
@@ -497,8 +537,8 @@ describe('workflow/verify', () => {
     });
 
     test.each([
-      ['an entry at the top of a nested collection', { subfolders: true }, 'index', 'pages'],
-      ['a nested collection without subfolders', { subfolders: false }, 'about/index', 'pages'],
+      ['a nested entry at the top level', { subfolders: true }, 'index', 'pages'],
+      ['nested entries without subfolders', { subfolders: false }, 'about/index', 'pages'],
       ['a collection that is no longer configured', { subfolders: true }, 'about/index', 'gone'],
     ])('moves nothing along with %s', (_label, nested, subPath, collectionName) => {
       vi.mocked(getNestedConfig).mockReturnValue(/** @type {any} */ (nested));
@@ -721,6 +761,51 @@ describe('workflow/verify', () => {
           ],
         }),
       ).toBeUndefined();
+    });
+  });
+
+  describe('pinReviewedHead', () => {
+    const entry = /** @type {any} */ ({
+      id: 'hello',
+      workflow: {
+        status: 'pending_publish',
+        pullRequest: { branch: 'cms/posts/hello', headSHA: 'new' },
+      },
+    });
+
+    test('keeps the entry as it is when its head is the reviewed one', () => {
+      expect(pinReviewedHead(entry, 'new')).toBe(entry);
+    });
+
+    test('pins the entry to the reviewed head when a reload has moved it on', async () => {
+      const pinned = pinReviewedHead(entry, 'old');
+
+      expect(pinned).toEqual({
+        ...entry,
+        workflow: {
+          ...entry.workflow,
+          pullRequest: { ...entry.workflow.pullRequest, headSHA: 'old' },
+        },
+      });
+      // The store’s entry is left alone
+      expect(entry.workflow.pullRequest.headSHA).toBe('new');
+      // The commit pushed since is then refused rather than published unseen
+      await expect(
+        verifyMergeState(
+          pinned,
+          /** @type {any} */ ({
+            onConfiguredBranches: true,
+            complete: true,
+            headSHA: 'new',
+            files: [],
+          }),
+          vi.fn(),
+        ),
+      ).rejects.toMatchObject({ message: PUBLISH_REFUSED, cause: { reason: 'entry_changed' } });
+    });
+
+    test('pins the entry to no head when the user hasn’t seen any version of it', () => {
+      expect(pinReviewedHead(entry, undefined).workflow.pullRequest.headSHA).toBeUndefined();
     });
   });
 

@@ -1,6 +1,6 @@
 import { createPNG } from '../../fixtures/files.js';
 import { BASE_CONFIG, expect, test } from '../../fixtures/test.js';
-import { getEditor } from '../../fixtures/ui.js';
+import { getEditor, getEntryRows } from '../../fixtures/ui.js';
 
 /**
  * Entries and collections sharing a folder: what one of them owns, and where each is listed.
@@ -52,6 +52,77 @@ test.describe('with entry-relative media in a folder shared by the entries', () 
     await expect
       .poll(async () => Object.keys(await cms.readRepo()).sort())
       .toEqual(['content/posts/b.md', 'content/posts/b.png', 'content/posts/c.png']);
+  });
+});
+
+test.describe('with a duplicated entry sharing the images of the original', () => {
+  test.use({
+    config: {
+      ...BASE_CONFIG,
+      collections: [
+        {
+          name: 'posts',
+          label: 'Posts',
+          folder: 'content/posts',
+          create: true,
+          media_folder: '',
+          public_folder: '',
+          fields: [
+            { name: 'title', label: 'Title' },
+            { name: 'image', label: 'Image', widget: 'image', required: false },
+          ],
+        },
+      ],
+    },
+  });
+
+  test.beforeEach(async ({ cms }) => {
+    await cms.open();
+    await cms.seed({
+      // A duplicate made in a folder shared by the entries refers to the original’s image
+      'content/posts/a.md': '---\ntitle: Alpha\nimage: a.png\n---\n',
+      'content/posts/a-1.md': '---\ntitle: Alpha Copy\nimage: a.png\n---\n',
+      'content/posts/a.png': createPNG({ color: [255, 0, 0] }),
+      'content/posts/b.md': '---\ntitle: Bravo\nimage: b.png\n---\n',
+      'content/posts/b.png': createPNG({ color: [0, 0, 255] }),
+    });
+    await cms.signIn();
+  });
+
+  /**
+   * Delete the entry with the given title from the editor.
+   * @param {import('@playwright/test').Page} page Page.
+   * @param {string} title Entry title.
+   */
+  const deleteEntry = async (page, title) => {
+    await page.getByRole('row', { name: new RegExp(`${title}$`) }).click();
+    await page.getByRole('button', { name: 'Show Editor Options' }).click();
+    await page.getByRole('menuitem', { name: 'Delete Entry' }).click();
+    await page
+      .getByRole('alertdialog', { name: 'Delete Entry' })
+      .getByRole('button', { name: 'Delete' })
+      .click();
+  };
+
+  test('keeps an image another entry still uses', async ({ cms, page }) => {
+    await deleteEntry(page, 'Alpha');
+
+    await expect
+      .poll(async () => Object.keys(await cms.readRepo()).sort())
+      .toEqual([
+        'content/posts/a-1.md',
+        'content/posts/a.png',
+        'content/posts/b.md',
+        'content/posts/b.png',
+      ]);
+  });
+
+  test('deletes an image only the entry uses', async ({ cms, page }) => {
+    await deleteEntry(page, 'Bravo');
+
+    await expect
+      .poll(async () => Object.keys(await cms.readRepo()).sort())
+      .toEqual(['content/posts/a-1.md', 'content/posts/a.md', 'content/posts/a.png']);
   });
 });
 
@@ -239,9 +310,7 @@ test.describe('with a file collection’s file in an entry collection’s folder
 
   test('lists the file in the file collection only', async ({ page }) => {
     await expect(page).toHaveURL(/#\/collections\/blog$/);
-    await expect(
-      page.getByRole('group', { name: 'Entry List' }).getByRole('grid').getByRole('row'),
-    ).toHaveText([/First/]);
+    await expect(getEntryRows(page)).toHaveText([/First/]);
 
     await page
       .getByRole('tree', { name: 'Collection List' })

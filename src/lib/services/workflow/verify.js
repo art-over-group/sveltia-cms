@@ -129,9 +129,9 @@ const getUpdatedEntry = (entry) => {
 };
 
 /**
- * Get the paths below the given entry’s folder in a nested collection with subfolders, which moving
- * the entry moves along with it. An entry at the top of the collection has no folder of its own,
- * and nothing can be moved with it.
+ * Get the paths below the given entry’s folder among nested entries stored in subfolders, which
+ * moving the entry moves along with it. An entry at the top of the collection has no folder of its
+ * own, and nothing can be moved with it.
  * @param {InternalCollection | undefined} collection Collection.
  * @param {Entry} entry Entry as it stands on the configured branch.
  * @returns {string[]} Paths of the descendant entries, as they stand on the configured branch.
@@ -154,7 +154,7 @@ const getDescendantPaths = (collection, entry) => {
 
 /**
  * Get the folders below which the given entry’s descendants land once it has moved, which are the
- * folders of its own files in a nested collection with subfolders.
+ * folders of its own files among nested entries stored in subfolders.
  * @param {InternalCollection | undefined} collection Collection.
  * @param {Entry} entry Entry as it stands on the pull request’s branch.
  * @returns {string[]} Folder paths, each with a trailing slash.
@@ -224,8 +224,9 @@ const getReferencingPaths = ({ entry, collection, updatedEntry, deletion }) => {
  * file in an `admin` or `cms` folder, where the CMS itself is served from; when the entry
  * is renamed or deleted, the entries referencing it, which are rewritten; and, in a nested
  * collection with subfolders, the entries below the folder of an entry being moved, which move
- * along with it. A Relation field doesn’t offer to add an entry while an entry is saved through
- * Editorial Workflow, so no other new entry is expected.
+ * along with it; and the new entries of other collections created from a Relation field of the
+ * entry, which the board lists on the entry’s card. Those have to be new on the configured branch
+ * as well: one that has appeared there since would be overwritten.
  * @param {UnpublishedEntry} entry Unpublished entry being published.
  * @param {WorkflowChangedFile[]} files Files the pull request changes.
  * @returns {string[]} Paths of the files that aren’t accounted for.
@@ -238,6 +239,11 @@ export const findUnexpectedChanges = (entry, files) => {
   const currentPaths = getEntryPaths(entry);
   const updatedPaths = updatedEntry ? getEntryPaths(updatedEntry) : [];
   const ownPaths = new Set([...currentPaths, ...updatedPaths]);
+
+  const companionPaths = new Set(
+    (entry.workflow.companions ?? []).flatMap(({ entry: companion }) => getEntryPaths(companion)),
+  );
+
   // Whether the pull request moves the entry: a rename, or a move to another folder of a nested
   // collection, which takes the entries below it and the assets beside it along. Its location is
   // compared rather than its files, as dropping a locale’s file leaves the entry where it is
@@ -266,6 +272,10 @@ export const findUnexpectedChanges = (entry, files) => {
 
     if (ownPaths.has(path)) {
       return true;
+    }
+
+    if (companionPaths.has(path)) {
+      return change === 'added';
     }
 
     const kind = classifyPath(path);
@@ -346,6 +356,28 @@ export const verifyMergeState = async (entry, state, fetchUnchangedPaths) => {
   if (paths.length) {
     throw createRefusal({ reason: 'other_changes', paths });
   }
+};
+
+/**
+ * Pin the publish of the given entry to the head commit the user has reviewed. The pull requests
+ * are read again from time to time, so the entry in the store can carry a commit pushed since the
+ * editor or the confirmation dialog was opened; merging that one would take content along that
+ * nobody has seen. With the reviewed head, {@link verifyMergeState} refuses the publish instead,
+ * and the user is asked to review the latest version first.
+ * @param {UnpublishedEntry} entry Entry from the store.
+ * @param {string | undefined} headSHA Head commit the user has reviewed. `undefined` if the user
+ * hasn’t seen any version of the pull request, e.g. when the editor was opened before it existed,
+ * which has the publish refused as well.
+ * @returns {UnpublishedEntry} Entry to publish; the same object if the head is the reviewed one.
+ */
+export const pinReviewedHead = (entry, headSHA) => {
+  const { workflow } = entry;
+
+  if (workflow.pullRequest.headSHA === headSHA) {
+    return entry;
+  }
+
+  return { ...entry, workflow: { ...workflow, pullRequest: { ...workflow.pullRequest, headSHA } } };
 };
 
 /**

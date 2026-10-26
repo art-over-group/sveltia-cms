@@ -1,4 +1,5 @@
 import { _ } from '@sveltia/i18n';
+import { isObject } from '@sveltia/utils/object';
 import { compare } from '@sveltia/utils/string';
 import equal from 'fast-deep-equal';
 
@@ -184,6 +185,20 @@ export const matchesFilter = (value, pattern, regex) => {
 };
 
 /**
+ * Compare two sort keys in ascending order.
+ * @param {string | number} a First key.
+ * @param {string | number} b Second key.
+ * @param {boolean} isStringType Whether the keys should be compared as strings (locale-aware); if
+ * `false`, numeric subtraction is used instead.
+ * @returns {number} Negative if `a` comes first, positive if `b` comes first, `0` if they are
+ * equal.
+ */
+export const compareSortKeys = (a, b, isStringType) =>
+  isStringType
+    ? compare(/** @type {string} */ (a), /** @type {string} */ (b))
+    : /** @type {number} */ (a) - /** @type {number} */ (b);
+
+/**
  * Sort an array of items using a key function and apply ascending/descending order. An item whose
  * key is `undefined` has no value to sort by, so it goes last in either order, keeping its place
  * among the other such items.
@@ -202,9 +217,11 @@ export const sortItemsByKey = (items, getKey, isStringType, order) => {
   const emptyItems = keyedItems.filter(({ key }) => key === undefined);
 
   valuedItems.sort(({ key: aKey }, { key: bKey }) =>
-    isStringType
-      ? compare(/** @type {string} */ (aKey), /** @type {string} */ (bKey))
-      : /** @type {number} */ (aKey) - /** @type {number} */ (bKey),
+    compareSortKeys(
+      /** @type {string | number} */ (aKey),
+      /** @type {string | number} */ (bKey),
+      isStringType,
+    ),
   );
 
   if (order === 'descending') {
@@ -324,12 +341,23 @@ export const initViewSettingsStorage = async (
   { defaults = {} } = {},
 ) => {
   const settingsDB = getRepositoryDatabase(repository, 'ui-settings');
-  const initial = { ...defaults, ...(await settingsDB?.get(storageKey)) };
+  /** @type {any} */
+  let saved;
+
+  // The saved settings are optional, so an IndexedDB failure mustn’t leave the view unset
+  try {
+    saved = await settingsDB?.get(storageKey);
+  } catch {
+    //
+  }
+
+  const initial = { ...defaults, ...(isObject(saved) ? saved : {}) };
 
   settingsState.current = initial;
 
   // Track the last persisted value in memory so we can skip redundant IndexedDB reads and writes
   // every time the state changes (list views update this state frequently as users sort/filter).
+  /** @type {Record<string, any> | undefined} */
   let lastSaved = initial;
 
   return createRootEffect(() => {

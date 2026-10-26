@@ -1159,7 +1159,7 @@ edit_slug_error:
   invalid: Przyjazny link nie może zawierać znaków specjalnych, w tym ukośników i spacji.
   duplicate: Ten przyjazny link jest już używany przez inny wpis.
 
-# Entry path editing in a nested collection
+# Entry path editing for nested entries
 # Heading for the parent folder picker shown when the `meta.path` option is enabled
 entry_parent_folder: Folder nadrzędny
 new_parent_folder: Nowy folder
@@ -1655,7 +1655,7 @@ config:
     oauth_implicit_flow: Skonfigurowana metoda uwierzytelniania (implicit flow) nie jest obsługiwana w Sveltia CMS. Użyj innej <a>metody uwierzytelniania</a>.
     github_pkce_unsupported: Autoryzacja PKCE nie jest jeszcze obsługiwana z powodu ograniczeń GitHub. Użyj innej <a>metody uwierzytelniania</a>.
     oauth_no_app_id: Identyfikator aplikacji OAuth nie jest zdefiniowany.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: Opcja `open_authoring` wymaga trybu publikacji `editorial_workflow`. Szczegóły znajdziesz w <a>dokumentacji</a>.
     # Don’t localize `auth_methods`
     no_auth_methods: Opcja `auth_methods` musi zawierać co najmniej jedną metodę.
@@ -2075,26 +2075,8 @@ prefs:
       description: Pokaż podkreślenie linków w podglądzie wpisu i etykietach interfejsu użytkownika.
       switch_label: Zawsze podkreślaj linki
 
-  # Advanced panel
-  advanced:
-    title: Zaawansowane
-    beta:
-      title: Funkcje beta
-      description: Włącz niektóre funkcje beta, które mogą być niestabilne lub nieprzetłumaczone.
-      switch_label: Dołącz do programu beta
-    deploy_hook:
-      title: Webhook wdrożeniowy
-      description: Wprowadź adres URL webhooka, który zostanie wywołany po ręcznym uruchomieniu wdrożenia poprzez wybranie Opublikuj zmiany. Można pozostawić puste, jeśli używasz GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: Adres URL hooka
-        saved: Adres URL hooka zapisany.
-        removed: Adres URL hooka usunięty.
-      # Authorization header input
-      auth:
-        field_label: Nagłówek autoryzacji (np. Bearer <token>) (opcjonalnie)
-        saved: Nagłówek autoryzacji zapisany.
-        removed: Nagłówek autoryzacji usunięty.
+  # Data Management panel
+  data:
     clear_data:
       title: Wyczyść dane
       # Clear File Cache button
@@ -2114,6 +2096,19 @@ prefs:
       title: Tryb programisty
       description: Włącz niektóre funkcje skierowane do programistów, w tym szczegółowe logi w konsoli i natywne menu kontekstowe.
       switch_label: Włącz tryb programisty
+    deploy_hook:
+      title: Webhook wdrożeniowy
+      description: Wprowadź adres URL webhooka, który zostanie wywołany po ręcznym uruchomieniu wdrożenia poprzez wybranie Opublikuj zmiany. Można pozostawić puste, jeśli używasz GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: Adres URL hooka
+        saved: Adres URL hooka zapisany.
+        removed: Adres URL hooka usunięty.
+      # Authorization header input
+      auth:
+        field_label: Nagłówek autoryzacji (np. Bearer <token>) (opcjonalnie)
+        saved: Nagłówek autoryzacji zapisany.
+        removed: Nagłówek autoryzacji usunięty.
 
 # ==============================================================================
 # Keyboard Shortcuts

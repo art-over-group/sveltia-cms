@@ -8,14 +8,14 @@ import {
   fetchPullRequestFiles,
   MAX_ITEMS,
   parseFileNodes,
-  parseRestFiles,
-  reopenPullRequest,
   updateDraftState,
 } from '$lib/services/backends/git/github/pull-requests';
 import { repository } from '$lib/services/backends/git/github/repository';
 import { fetchAPI, fetchGraphQL } from '$lib/services/backends/git/shared/api';
 import { runConcurrently } from '$lib/services/backends/git/shared/concurrency';
 import { pruneForkBranches, updateForkStatusWith } from '$lib/services/backends/git/shared/fork';
+import { parseRestFiles } from '$lib/services/backends/git/shared/pull-requests';
+import { applyForkPullRequestStatus } from '$lib/services/backends/git/shared/workflow';
 import { user } from '$lib/services/user/account.svelte';
 import { encodePathSegments } from '$lib/services/utils/url';
 import { getBranchListPrefix } from '$lib/services/workflow/branch';
@@ -275,7 +275,7 @@ export const fetchForkBranchFileList = async (pullRequest) => {
     await fetchAPI(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=${MAX_ITEMS.files}`)
   );
 
-  pullRequest.files = parseRestFiles(files);
+  pullRequest.files = parseRestFiles(files, { removedStatus: 'removed' });
 };
 
 /**
@@ -358,29 +358,11 @@ const fetchForkRequestState = async ({ nodeId }) => {
 
 /**
  * Bring a pull request in line with the given status, for {@link updateForkStatusWith}.
- * @param {object} args Arguments.
- * @param {WorkflowPullRequest} args.pullRequest Pull request.
- * @param {WorkflowStatus} args.status New status.
- * @param {string} [args.state] Pull request state, e.g. `OPEN`.
- * @param {boolean} [args.draft] Whether the pull request is a draft.
+ * @param {Parameters<typeof applyForkPullRequestStatus>[0]} args Arguments.
+ * @returns {Promise<void>}
  */
-const applyForkStatus = async ({ pullRequest, status, state, draft }) => {
-  if (status === 'draft') {
-    // Converting the pull request to a draft keeps it — and the discussion on it — in place while
-    // taking it out of the maintainers’ review queue
-    if (state === 'OPEN' && !draft) {
-      await updateDraftState(pullRequest, true);
-    }
-  } else {
-    if (state === 'CLOSED') {
-      await reopenPullRequest(pullRequest);
-    }
-
-    if (draft) {
-      await updateDraftState(pullRequest, false);
-    }
-  }
-};
+const applyForkStatus = (args) =>
+  applyForkPullRequestStatus(args, { repository, updateDraftState });
 
 /**
  * Move an Open Authoring entry between the drafting and review stages. A contributor can’t label a

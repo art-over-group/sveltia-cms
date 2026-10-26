@@ -8,10 +8,12 @@ import {
 } from '$lib/services/contents/draft';
 import { getInheritedI18nOption } from '$lib/services/contents/draft/create/proxy.svelte';
 import { populateDefaultValue } from '$lib/services/contents/draft/defaults';
+import { getDraftFieldArgs } from '$lib/services/contents/entry/fields';
 import { deleteSubtree } from '$lib/services/contents/entry/subtree';
 import { syncAllDuplicateKeys } from '$lib/services/contents/fields/key-value/duplicate-keys';
 import { getListFieldInfo } from '$lib/services/contents/fields/list/helpers';
 import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
+import { localizeDefaultValue } from '$lib/services/contents/i18n/options';
 
 /**
  * @import {
@@ -108,15 +110,27 @@ const resetContent = (args) => {
 
     const { fields } = /** @type {FieldWithSubFields} */ (fieldConfig);
     const { types, typeKey = 'type' } = /** @type {FieldWithTypes} */ (fieldConfig);
-    const { default: objectDefault } = /** @type {ObjectField} */ (fieldConfig);
+    // With the `i18n` option that applies to the field, so a duplicated field takes the default
+    // locale’s localized default
+    const objectConfig = /** @type {ObjectField} */ ({ ...fieldConfig, i18n });
+
+    const { default: objectDefault } = /** @type {ObjectField} */ (
+      localizeDefaultValue({ fieldConfig: objectConfig, locale, defaultLocale })
+    );
+
     const type = content[`${keyPath}.${typeKey}`];
     const subFields = fields ?? types?.find(({ name }) => name === type)?.fields ?? [];
 
     subFields.forEach((subField) => {
-      // The default value of the Object field as a whole takes precedence over the subfield’s own
+      // The default value of the Object field as a whole takes precedence over the subfield’s own,
+      // including its localized one
       const subFieldConfig =
         restore && isObject(objectDefault) && Object.hasOwn(objectDefault, subField.name)
-          ? /** @type {Field} */ ({ ...subField, default: objectDefault[subField.name] })
+          ? /** @type {Field} */ ({
+              ...subField,
+              default: objectDefault[subField.name],
+              default_localized: undefined,
+            })
           : subField;
 
       resetContent({
@@ -169,7 +183,7 @@ const resetContent = (args) => {
     fieldConfig: /** @type {Field} */ ({
       ...fieldConfig,
       i18n,
-      ...(restore ? {} : { default: undefined }),
+      ...(restore ? {} : { default: undefined, default_localized: undefined }),
     }),
     locale,
     defaultLocale,
@@ -225,7 +239,9 @@ export const canResetField = ({ valueMap, restore = false, ...args }) => {
  * Clear the value of the given field in the entry draft, or restore its default value, so the
  * user can start over. See {@link resetContent} for what that means for each field type. Resetting
  * a field in the default locale resets it in the other locales as well where it’s duplicated,
- * whether with its own `duplicate` strategy or along with an ancestor’s.
+ * whether with its own `duplicate` strategy or along with an ancestor’s. A field using the
+ * `duplicate_if_empty` strategy is left alone in the other locales, which take the default locale’s
+ * value again as soon as it’s next edited.
  * @param {object} args Arguments.
  * @param {EntryDraft} args.draft Entry draft.
  * @param {Field} args.fieldConfig Field configuration.
@@ -234,8 +250,8 @@ export const canResetField = ({ valueMap, restore = false, ...args }) => {
  * @param {boolean} [args.restore] Whether to restore the default values rather than clearing them.
  */
 export const resetField = ({ draft, fieldConfig, keyPath, locale, restore = false }) => {
-  const { collectionName, fileName, isIndexFile, currentValues, defaultLocale } = draft;
-  const getFieldArgs = { collectionName, fileName, isIndexFile };
+  const { currentValues, defaultLocale } = draft;
+  const getFieldArgs = getDraftFieldArgs(draft);
 
   // The other locales are reset here rather than by the value proxy, which copies a value to them
   // as it’s written, as the proxy can’t tell which field a List item or a KeyValue pair belongs to
@@ -341,7 +357,7 @@ export const canResetEntry = ({ draft, locale, restore = false }) => {
  * @param {boolean} [args.restore] Whether to restore the default values rather than clearing them.
  */
 export const resetEntry = ({ draft, locale, restore = false }) => {
-  const { collectionName, fileName, isIndexFile, fields, currentValues, defaultLocale } = draft;
+  const { fields, currentValues, defaultLocale } = draft;
   const locales = getTargetLocales(draft, locale);
 
   suspendAutoDuplication(() => {
@@ -351,7 +367,7 @@ export const resetEntry = ({ draft, locale, restore = false }) => {
       syncAllDuplicateKeys({
         valueStore: currentValues,
         defaultLocale,
-        getFieldArgs: { collectionName, fileName, isIndexFile },
+        getFieldArgs: getDraftFieldArgs(draft),
       });
     }
   });

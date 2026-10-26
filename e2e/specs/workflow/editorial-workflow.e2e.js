@@ -1,7 +1,7 @@
 import { openEntryPullRequest, post, WORKFLOW_CONFIG } from '../../fixtures/configs/workflow.js';
 import { createPNG } from '../../fixtures/files.js';
 import { expect, test } from '../../fixtures/test.js';
-import { getEditor, openEntry } from '../../fixtures/ui.js';
+import { getEditor, getEntryRows, openEntry } from '../../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -115,9 +115,7 @@ test('saves a change to a published entry to a pull request', async ({ cms, gith
     .toBe(post('First Post', 'Hello again!'));
   expect(github.readFile('content/posts/first-post.md')).toBe(post('First Post', 'Hello, world!'));
   // The draft stands in for the published entry, rather than being listed twice
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post.*Draft/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post.*Draft/]);
 
   // Another save goes to the same branch and pull request
   await openEntry(page, 'First Post');
@@ -154,12 +152,58 @@ test('moves an entry through the review stages', async ({ cms, github, page }) =
   await expect
     .poll(() => ({ labels: pullRequest.labels, draft: pullRequest.draft }))
     .toEqual({ labels: ['sveltia-cms/pending_publish'], draft: false });
+  // The pull request is the user’s own, which the GitHub doesn’t let them approve
+  expect(pullRequest.approvals).toBeUndefined();
 
   await cms.changeStatus(/Status: .*Ready/, 'Draft');
   // The labels are updated first, then the draft state
   await expect
     .poll(() => ({ labels: pullRequest.labels, draft: pullRequest.draft }))
     .toEqual({ labels: ['sveltia-cms/draft'], draft: true });
+});
+
+test('approves a colleague’s pull request while it’s marked as ready', async ({
+  cms,
+  github,
+  page,
+}) => {
+  const pullRequest = openEntryPullRequest(github, {
+    slug: 'second-post',
+    files: { 'content/posts/second-post.md': post('Second Post', 'Coming soon.') },
+    status: 'pending_review',
+  });
+
+  pullRequest.author = github.colleague;
+
+  await cms.open();
+  await openEntry(page, 'Second Post');
+  await cms.changeStatus(/Status: .*In Review/, 'Ready');
+
+  // The approval is pinned to the commit the entry was reviewed at
+  await expect
+    .poll(() => pullRequest.approvals)
+    .toEqual([
+      expect.objectContaining({
+        login: github.user.login,
+        commitId: github.getPullRequestHead(pullRequest).oid,
+      }),
+    ]);
+
+  // Moving the entry back withdraws the approval
+  await cms.changeStatus(/Status: .*Ready/, 'In Review');
+  await expect.poll(() => pullRequest.approvals).toEqual([]);
+
+  // A review can’t be deleted on GitHub, so it’s dismissed
+  expect(pullRequest.dismissals).toEqual(['The entry is no longer ready to publish.']);
+
+  // Moving the entry between the other stages approves nothing
+  await cms.changeStatus(/Status: .*In Review/, 'Draft');
+  await expect.poll(() => pullRequest.labels).toEqual(['sveltia-cms/draft']);
+  expect(pullRequest.approvals).toEqual([]);
+
+  // Marking it as ready again approves it again
+  await cms.changeStatus(/Status: .*Draft/, 'Ready');
+  await expect.poll(() => pullRequest.approvals).toHaveLength(1);
 });
 
 test('keeps the other labels of a pull request', async ({ cms, github, page }) => {
@@ -204,10 +248,46 @@ test('publishes an entry by merging its pull request', async ({ cms, github, pag
   expect(github.head.parents).toHaveLength(2);
   // The branch is deleted after the merge
   await expect.poll(() => github.refs.has('cms/posts/second-post')).toBe(false);
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-    /Second Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
+});
+
+// @see https://github.com/sveltia/sveltia-cms/issues/1094
+test('publishes an entry once the required check on its pull request passes', async ({
+  cms,
+  github,
+  page,
+}) => {
+  const pullRequest = openEntryPullRequest(github, {
+    slug: 'second-post',
+    files: { 'content/posts/second-post.md': post('Second Post', 'Coming soon.') },
+    status: 'pending_publish',
+  });
+
+  github.checksRunning = true;
+  await page.clock.install();
+  await cms.open();
+
+  const editor = await openEntry(page, 'Second Post');
+
+  await editor.getByRole('button', { name: 'Publish Entry' }).click();
+  await page
+    .getByRole('alertdialog', { name: 'Publish Entry' })
+    .getByRole('button', { name: 'Publish' })
+    .click();
+
+  // GitHub can’t merge it yet, so the CMS sets it to auto-merge once the check passes
+  await expect.poll(() => pullRequest.autoMerge).toMatchObject({ method: 'merge' });
+  expect(pullRequest.state).toBe('open');
+
+  // The CMS checks every 10 seconds whether it has been merged
+  github.finishChecks();
+  await page.clock.fastForward('00:11');
+
+  await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
+  expect(pullRequest.state).toBe('merged');
+  expect(github.readFile('content/posts/second-post.md')).toBe(post('Second Post', 'Coming soon.'));
+  // The branch is deleted after the merge
+  await expect.poll(() => github.refs.has('cms/posts/second-post')).toBe(false);
 });
 
 test('refuses to publish an entry whose branch holds other work', async ({ cms, github, page }) => {
@@ -414,9 +494,7 @@ test('deletes an unpublished entry by closing its pull request', async ({ cms, g
   await expect.poll(() => pullRequest.state).toBe('closed');
   await expect.poll(() => github.refs.has('cms/posts/second-post')).toBe(false);
   expect(github.head.oid).toBe(mainBefore);
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
 });
 
 test('marks a published entry for deletion with a pull request', async ({ cms, github, page }) => {
@@ -513,10 +591,9 @@ test('discards the changes to a published entry', async ({ cms, github, page }) 
   await expect.poll(() => pullRequest.state).toBe('closed');
   await expect.poll(() => github.refs.has('cms/posts/first-post')).toBe(false);
   expect(github.readFile('content/posts/first-post.md')).toBe(post('First Post', 'Hello, world!'));
-  // The published version is shown again
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /^\s*First Post\s*$/,
-  ]);
+  // The published version is shown again, without a status
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
+  await expect(getEntryRows(page).locator('.status-badge')).toHaveCount(0);
 });
 
 test('saves a draft with a required field left empty, but keeps it from review', async ({
@@ -633,9 +710,7 @@ test('drops a labelled pull request moved to another base branch from the board'
   await cms.open();
 
   // The entry isn’t listed as unpublished, and the board has nothing on it
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
   await page.getByRole('radio', { name: 'Editorial Workflow' }).click();
 
   const board = page.getByRole('group', { name: 'Editorial Workflow' });
@@ -741,9 +816,7 @@ test('deletes several unpublished entries at once', async ({ cms, github, page }
 
   await expect.poll(() => pullRequests.map(({ state }) => state)).toEqual(['closed', 'closed']);
   expect(github.getWorkflowBranches()).toEqual([]);
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
 });
 
 test.describe('with an image field', () => {
@@ -842,7 +915,7 @@ test.describe('without a configured branch', () => {
     await cms.open();
 
     // The pull requests can only be told apart from someone else’s once the default branch is known
-    await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+    await expect(getEntryRows(page)).toHaveText([
       /Unpublished Entries/,
       /Second Post.*Draft/,
       /Published Entries/,

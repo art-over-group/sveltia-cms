@@ -12,12 +12,16 @@
     getNearestEditorFromDOMNode,
     $insertNodes as insertNodes,
   } from 'lexical';
-  import { getContext, tick } from 'svelte';
+  import { tick } from 'svelte';
 
   import { EditorComponent } from '$lib/components/contents/details/fields/rich-text/custom-node-features';
   import { cmsConfig } from '$lib/services/config';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
   import { getFieldValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
+  import {
+    getFieldEditorContext,
+    isInEditorComponent,
+  } from '$lib/services/contents/editor/field-context';
   import { trackPendingFieldUpdate } from '$lib/services/contents/editor/pending';
   import { getField } from '$lib/services/contents/entry/fields';
   import {
@@ -49,7 +53,7 @@
 
   /**
    * @import { ImageEntry } from '$lib/services/contents/fields/rich-text/images';
-   * @import { FieldEditorContext, FieldEditorProps } from '$lib/types/private';
+   * @import { FieldEditorProps } from '$lib/types/private';
    * @import {
    * EditorComponentDefinition,
    * ImageField,
@@ -68,10 +72,9 @@
 
   const defaultConfig = cmsConfig.current?.field_defaults?.richtext ?? {};
   /* v8 ignore start -- the editor is always rendered within a field editor */
-  /** @type {FieldEditorContext} */
-  const { fieldContext, parentComponentNames, valueStoreKey } = getContext('field-editor') ?? {};
+  const { parentComponentNames, valueStoreKey } = getFieldEditorContext();
   /* v8 ignore stop */
-  const inEditorComponent = fieldContext === 'rich-text-editor-component';
+  const inEditorComponent = isInEditorComponent(valueStoreKey);
   const componentName = parentComponentNames.at(-1);
 
   /** @type {FieldEditorProps & Props} */
@@ -221,6 +224,12 @@
    * @param {ClipboardEvent} event `paste` event.
    */
   const onPaste = async (event) => {
+    // Lexical applies an update even while the editor isn’t editable, so nothing is inserted to a
+    // read-only field, nor is the file added to the draft
+    if (readonly) {
+      return;
+    }
+
     const { target } = event;
     const images = await getPastedImages(event);
 
@@ -234,6 +243,11 @@
    * @param {DragEvent} event `drop` event.
    */
   const onDrop = async (event) => {
+    // Same as above
+    if (readonly) {
+      return;
+    }
+
     const { target } = event;
     const images = await getDroppedImages(event);
 

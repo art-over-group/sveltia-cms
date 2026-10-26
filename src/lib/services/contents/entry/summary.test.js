@@ -8,6 +8,7 @@ import {
   sanitizeEntrySummary,
 } from '$lib/services/contents/entry/summary';
 import { getEntryPathRegEx } from '$lib/services/contents/file/config';
+import { expectLinearTime } from '$lib/test/complexity';
 
 /**
  * @import { Entry, InternalCollection, LocalizedEntry } from '$lib/types/private';
@@ -423,6 +424,33 @@ describe('Test getEntrySummary()', () => {
     expect(result).toBe('Category Index');
   });
 
+  test('formats the index file like any other entry with `useIndexFileLabel: false`', () => {
+    const indexFileCollection = {
+      ...collection,
+      index_file: { label: 'Category Index' },
+      _file: {
+        ...collection._file,
+        fullPathRegEx: /^content\/tags\/(?<subPath>[^/]+?\/index|_index)\.(?<locale>en|de)\.md$/,
+      },
+    };
+
+    const indexFileEntry = {
+      ...entry,
+      slug: '_index',
+      subPath: '_index',
+      locales: { de: { ...entry.locales.de, path: 'content/tags/_index.de.md' } },
+    };
+
+    const result = getEntrySummary(indexFileCollection, indexFileEntry, {
+      locale: 'de',
+      useTemplate: true,
+      template: '{{slug}}',
+      useIndexFileLabel: false,
+    });
+
+    expect(result).toBe('_index');
+  });
+
   test('handles missing locales fallback (lines 210-211)', () => {
     // Entry with missing requested locale should fall back to first available
     const entryWithSingleLocale = {
@@ -483,7 +511,7 @@ describe('Test getEntrySummary()', () => {
 
   test('covers locales fallback when requested locale is undefined (line 211)', () => {
     // Create entry where first locale doesn't match requested locale
-    // Force the ternary: locales[undefined ?? defaultLocale] ?? Object.values(locales)[0] ?? {}
+    // Force the ternary: the requested locale, or the first one the entry has
     const entryWithMultipleLocales = {
       ...entry,
       slug: 'test-slug',
@@ -502,7 +530,7 @@ describe('Test getEntrySummary()', () => {
     });
 
     // With defaultLocale='de', tries to find 'de' locale
-    // Doesn't exist, so falls back to Object.values(locales)[0] which is 'fr' locale
+    // Doesn't exist, so falls back to the first locale the entry has, which is 'fr'
     expect(result).toContain('French');
   });
 });
@@ -712,23 +740,22 @@ describe('Test getEntrySummaryFromContent()', () => {
     expect(getEntrySummaryFromContent({ body: 'Text # Not a header' })).toBe('');
   });
 
-  test('should find a header in linear time', () => {
-    const bodies = [
-      `# a${' '.repeat(100_000)}b`,
-      `# a${' '.repeat(100_000)}{#b`,
-      `# a${' {#'.repeat(50_000)}`,
-      `${'#'.repeat(100_000)}x`,
-      '# \n'.repeat(50_000),
-    ];
+  test.each(
+    /** @type {[string, (n: number) => string][]} */ ([
+      ['spaces in a header', (n) => `# a${' '.repeat(n)}b`],
+      ['spaces before an unclosed anchor', (n) => `# a${' '.repeat(n)}{#b`],
+      ['anchor starts', (n) => `# a${' {#'.repeat(n)}`],
+      ['header markers', (n) => `${'#'.repeat(n)}x`],
+      ['empty headers', (n) => '# \n'.repeat(n)],
+    ]),
+  )('should find a header in linear time: %s', (_name, build) => {
+    expectLinearTime(build, (body) => getEntrySummaryFromContent({ body }), 2000);
+  });
 
-    bodies.forEach((body) => {
-      const start = performance.now();
-
-      getEntrySummaryFromContent({ body });
-      expect(performance.now() - start).toBeLessThan(50);
-    });
-
-    expect(getEntrySummaryFromContent({ body: bodies[0] })).toBe(`a${' '.repeat(100_000)}b`);
+  test('should find a header with a long run of spaces', () => {
+    expect(getEntrySummaryFromContent({ body: `# a${' '.repeat(100_000)}b` })).toBe(
+      `a${' '.repeat(100_000)}b`,
+    );
   });
 
   test('should return empty string when nothing found', () => {
@@ -1168,7 +1195,7 @@ describe('Test replace()', () => {
         email: 'john@example.com',
       },
     },
-    defaultLocale: 'en',
+    locale: 'en',
   };
 
   test('should replace slug placeholder', () => {
@@ -1352,7 +1379,7 @@ describe('Test replace()', () => {
         ...context.replaceSubContext,
         locales: ['en'],
       },
-      defaultLocale: 'en',
+      locale: 'en',
     };
 
     // 'missingField' doesn't exist in replaceSub (returns undefined)
@@ -1639,7 +1666,7 @@ describe('Additional comprehensive tests for edge cases', () => {
         commitDate: undefined,
         commitAuthor: { name: '', login: '', email: '' },
       },
-      defaultLocale: 'en',
+      locale: 'en',
     };
 
     const result = replace('commit_author', context);
@@ -1674,7 +1701,7 @@ describe('Additional comprehensive tests for edge cases', () => {
         commitDate: undefined,
         commitAuthor: undefined,
       },
-      defaultLocale: 'en',
+      locale: 'en',
     };
 
     // Note: This depends on how transformations are applied
@@ -1755,7 +1782,7 @@ describe('Additional comprehensive tests for edge cases', () => {
           email: 'john@example.com',
         },
       },
-      defaultLocale: 'en',
+      locale: 'en',
     };
 
     // Regular field with no special transformation, not in replaceSub
@@ -1807,7 +1834,7 @@ describe('Additional comprehensive tests for edge cases', () => {
           email: 'john@example.com',
         },
       },
-      defaultLocale: 'en',
+      locale: 'en',
     };
 
     // With ternary transformation on falsy value, should use valueMap

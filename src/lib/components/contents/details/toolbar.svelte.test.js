@@ -3,6 +3,7 @@ import { page, userEvent } from 'vitest/browser';
 
 import { allAssetFolders } from '$lib/services/assets/folders';
 import { backendName } from '$lib/services/backends';
+import { reportCommits } from '$lib/services/backends/commit-progress';
 import { createLocalizedError } from '$lib/services/backends/git/shared/errors';
 import { getCollection } from '$lib/services/contents/collection';
 import {
@@ -13,7 +14,7 @@ import { deleteEntries } from '$lib/services/contents/collection/data/delete';
 import { nestedFilterPath } from '$lib/services/contents/collection/nested';
 import { duplicateDraft } from '$lib/services/contents/draft/create/duplicate';
 import { saveEntry } from '$lib/services/contents/draft/save';
-import { copyFromLocaleToast } from '$lib/services/contents/editor';
+import { copyFromLocaleToast, listItemClipboardToast } from '$lib/services/contents/editor';
 import { trackPendingFieldUpdate } from '$lib/services/contents/editor/pending';
 import { entryEditorSettings } from '$lib/services/contents/editor/settings';
 import { sidebarSheetPanel } from '$lib/services/contents/editor/sidebar';
@@ -27,6 +28,7 @@ import {
   deleteWorkflowEntries,
   discardWorkflowEntries,
   discardWorkflowEntry,
+  publishWorkflowEntry,
   updateWorkflowStatus,
 } from '$lib/services/workflow/save';
 import {
@@ -57,6 +59,7 @@ vi.mock('$lib/services/workflow/save', () => ({
   saveWorkflowChanges: vi.fn(),
   updateWorkflowStatus: vi.fn(),
   publishWorkflowEntry: vi.fn(),
+  publishReviewedEntry: vi.fn(),
   discardWorkflowEntry: vi.fn(),
   deleteWorkflowEntry: vi.fn(),
   discardWorkflowEntries: vi.fn(),
@@ -167,7 +170,12 @@ describe('Toolbar', () => {
     await save.click();
 
     await vi.waitFor(() =>
-      expect(saveEntry).toHaveBeenCalledWith({ draft, skipCI: undefined, overwrite: false }),
+      expect(saveEntry).toHaveBeenCalledWith({
+        draft,
+        skipCI: undefined,
+        overwrite: false,
+        publish: false,
+      }),
     );
     await expect.poll(() => window.location.hash).toBe('#/collections/posts');
     expect(entryDraft.current).toBeNull();
@@ -199,6 +207,31 @@ describe('Toolbar', () => {
     await expect.element(save).toBeEnabled();
   });
 
+  test('reports the progress of a long save, and keeps the button disabled until it ends', async () => {
+    const { draft } = await renderExisting();
+    const save = page.getByRole('button', { name: 'Save' });
+    const { promise, resolve } = Promise.withResolvers();
+
+    vi.mocked(saveEntry).mockImplementation(async () => {
+      reportCommits(12, 26);
+      await promise;
+
+      return /** @type {any} */ (helloEntry);
+    });
+
+    draft.currentValues._default.title = 'Hi';
+    await expect.element(save).toBeEnabled();
+    await save.click();
+
+    const status = /** @type {HTMLElement} */ (document.querySelector('.save-progress'));
+
+    await expect.element(status).toMatchTextContent('Saving to GitHub: 12 of about 26 commits');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    await expect.element(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    resolve(undefined);
+    await expect.element(page.getByText('Saving to GitHub')).not.toBeInTheDocument();
+  });
+
   test('can be saved while a change is on its way to the draft', async () => {
     const { draft } = await renderExisting();
     const save = page.getByRole('button', { name: 'Save' });
@@ -213,7 +246,12 @@ describe('Toolbar', () => {
     resolve(undefined);
 
     await vi.waitFor(() =>
-      expect(saveEntry).toHaveBeenCalledWith({ draft, skipCI: undefined, overwrite: false }),
+      expect(saveEntry).toHaveBeenCalledWith({
+        draft,
+        skipCI: undefined,
+        overwrite: false,
+        publish: false,
+      }),
     );
   });
 
@@ -346,7 +384,12 @@ describe('Toolbar', () => {
     await dialog.getByRole('button', { name: 'Save Anyway' }).click();
 
     await vi.waitFor(() =>
-      expect(saveEntry).toHaveBeenLastCalledWith({ draft, skipCI: undefined, overwrite: true }),
+      expect(saveEntry).toHaveBeenLastCalledWith({
+        draft,
+        skipCI: undefined,
+        overwrite: true,
+        publish: false,
+      }),
     );
     // Saved and closed
     await expect.poll(() => entryDraft.current).toBe(null);
@@ -710,7 +753,12 @@ describe('Toolbar', () => {
 
     await page.getByRole('button', { name: 'Publish' }).click();
     await vi.waitFor(() =>
-      expect(saveEntry).toHaveBeenCalledWith({ draft, skipCI: undefined, overwrite: false }),
+      expect(saveEntry).toHaveBeenCalledWith({
+        draft,
+        skipCI: undefined,
+        overwrite: false,
+        publish: false,
+      }),
     );
 
     // The split button offers the opposite
@@ -723,6 +771,7 @@ describe('Toolbar', () => {
         draft: anotherDraft,
         skipCI: true,
         overwrite: false,
+        publish: false,
       }),
     );
   });
@@ -1017,7 +1066,7 @@ describe('Toolbar', () => {
     expect(menu.getByRole('menuitem', { name: 'Delete Entry' }).elements()).toHaveLength(0);
   });
 
-  test('goes back to the folder being browsed in a nested collection', async () => {
+  test('goes back to the folder being browsed in a collection with nested entries', async () => {
     await initTestConfig({
       collections: [
         {
@@ -1095,6 +1144,15 @@ describe('Toolbar', () => {
     } finally {
       setAssets([]);
     }
+  });
+
+  test('shows the toast of the list item clipboard', async () => {
+    await renderExisting();
+
+    listItemClipboardToast.current = { id: 1, show: true, status: 'success', message: 'Copied.' };
+    await expect.poll(getShownToastText).toBe('check_circle Success Copied.');
+    await waitForToastsToHide();
+    expect(listItemClipboardToast.current.show).toBe(false);
   });
 
   test('reports a copy without a source language', async () => {
@@ -1271,6 +1329,68 @@ describe('Toolbar', () => {
       );
       await expect.poll(() => window.location.hash).toBe('#/collections/posts');
       expect(draft).toBeDefined();
+    });
+
+    test('offers to mark a saved draft ready when the review stage is left out', async () => {
+      await initTestConfig({
+        backend: { name: 'github', repo: 'me/site' },
+        publish_mode: { type: 'editorial_workflow', stages: ['draft', 'pending_publish'] },
+        collections: [postsCollection],
+      });
+
+      await renderToolbar();
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      const dialog = page.getByRole('alertdialog', { name: 'Mark as Ready' });
+
+      await expect
+        .element(dialog)
+        .toMatchTextContent(/Mark the entry as ready so it can be published\?/);
+      await dialog.getByRole('button', { name: 'Mark as Ready' }).click();
+
+      await vi.waitFor(() =>
+        expect(updateWorkflowStatus).toHaveBeenCalledWith(unpublishedEntry, 'pending_publish'),
+      );
+    });
+
+    test('saves and publishes in one go when direct publishing is enabled', async () => {
+      await initTestConfig({
+        backend: { name: 'github', repo: 'me/site' },
+        publish_mode: { type: 'editorial_workflow', direct_publish: true },
+        collections: [postsCollection],
+      });
+
+      await renderToolbar();
+      await page.getByRole('button', { name: 'More Options' }).first().click();
+      await page.getByRole('menuitem', { name: 'Save and Publish' }).click();
+
+      await vi.waitFor(() =>
+        expect(saveEntry).toHaveBeenCalledWith(
+          expect.objectContaining({ publish: true, skipCI: false }),
+        ),
+      );
+      await vi.waitFor(() => expect(publishWorkflowEntry).toHaveBeenCalledWith(unpublishedEntry));
+      // Nothing is left to hand over for review
+      expect(page.getByRole('alertdialog').elements()).toHaveLength(0);
+      await expect.poll(() => window.location.hash).toBe('#/collections/posts');
+    });
+
+    test('saves a draft as usual when direct publishing is enabled', async () => {
+      await initTestConfig({
+        backend: { name: 'github', repo: 'me/site' },
+        publish_mode: { type: 'preview', direct_publish: true },
+        collections: [postsCollection],
+      });
+
+      await renderToolbar();
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+      await vi.waitFor(() =>
+        expect(saveEntry).toHaveBeenCalledWith(expect.objectContaining({ publish: false })),
+      );
+      expect(publishWorkflowEntry).not.toHaveBeenCalled();
+      // Preview Workflow has no stage to hand the draft over to
+      expect(page.getByRole('alertdialog').elements()).toHaveLength(0);
     });
 
     test('leaves another entry opened while sending for review alone', async () => {
@@ -1652,7 +1772,12 @@ describe('Toolbar', () => {
 
       // A plain save: no review prompt, and the editor closes
       await vi.waitFor(() =>
-        expect(saveEntry).toHaveBeenCalledWith({ draft, skipCI: undefined, overwrite: false }),
+        expect(saveEntry).toHaveBeenCalledWith({
+          draft,
+          skipCI: undefined,
+          overwrite: false,
+          publish: false,
+        }),
       );
       await expect.poll(() => window.location.hash).toBe('#/collections/posts');
       expect(page.getByRole('alertdialog').elements()).toHaveLength(0);

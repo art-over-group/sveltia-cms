@@ -1,4 +1,7 @@
+import { getPathInfo } from '@sveltia/utils/file';
+
 import { sortItemsByKey } from '$lib/services/common/view';
+import { getCommitAuthorName } from '$lib/services/utils/commit-author';
 
 /**
  * @import { Asset, SortingConditions } from '$lib/types/private';
@@ -12,10 +15,10 @@ import { sortItemsByKey } from '$lib/services/common/view';
  * @returns {any} Value.
  */
 export const getValue = (asset, key) => {
-  const { commitAuthor: { name, login, email } = {}, commitDate } = asset;
+  const { commitAuthor, commitDate } = asset;
 
   if (key === 'commit_author') {
-    return name || login || email;
+    return getCommitAuthorName(commitAuthor);
   }
 
   if (key === 'commit_date') {
@@ -23,9 +26,10 @@ export const getValue = (asset, key) => {
   }
 
   // Exclude the file extension when sorting by name to sort numbered files properly, e.g.
-  // `hero.png`, `hero-1.png`, `hero-2.png` instead of `hero-1.png`, `hero-2.png`, `hero.png`
+  // `hero.png`, `hero-1.png`, `hero-2.png` instead of `hero-1.png`, `hero-2.png`, `hero.png`. Only
+  // the extension is removed, so dots in the rest of the name, e.g. `v1.10.png`, still count
   if (key === 'name') {
-    return asset.name.split('.')[0];
+    return getPathInfo(asset.name).filename;
   }
 
   return /** @type {Record<string, any>} */ (asset)[key] ?? '';

@@ -11,7 +11,7 @@
   import { isPublishAllowed, publishingBranches } from '$lib/services/workflow';
   import { getPublishDialogStrings } from '$lib/services/workflow/dialogs';
   import { closeWorkflowEntryEditor } from '$lib/services/workflow/editor';
-  import { publishWorkflowEntry } from '$lib/services/workflow/save';
+  import { publishReviewedEntry } from '$lib/services/workflow/save';
   import { canPublish } from '$lib/services/workflow/validate';
   import { getWorkflowErrorMessage } from '$lib/services/workflow/verify';
 
@@ -72,7 +72,8 @@
     const { collectionName, pullRequest } = entry.workflow;
 
     try {
-      await publishWorkflowEntry(entry);
+      // Pinned to the version the editor shows
+      await publishReviewedEntry(entry, entryDraft.current?.originalEntry);
       closeWorkflowEntryEditor({ entryDraft, branch: pullRequest.branch, collectionName });
     } catch (/** @type {any} */ ex) {
       errorMessage = getWorkflowErrorMessage(ex, 'workflow.publishing_entry_failed');

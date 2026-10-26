@@ -12,6 +12,11 @@
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
   import { getFieldValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
   import { getKeysByPrefix } from '$lib/services/contents/entry/key-paths';
+  import {
+    getTypedSubKeyPath,
+    resolveVariableType,
+  } from '$lib/services/contents/fields/object/helpers';
+  import { getFieldLabel } from '$lib/services/contents/i18n/options';
 
   /**
    * @import { FieldPreviewProps } from '$lib/types/private';
@@ -51,30 +56,35 @@
   const hasVariableTypes = $derived(Array.isArray(types));
   const typeKeyPath = $derived(`${keyPath}.${typeKey}`);
   const type = $derived(hasVariableTypes ? valueMap[typeKeyPath] : undefined);
-  const typeConfig = $derived(type ? types?.find(({ name }) => name === type) : undefined);
-  const label = $derived(typeConfig ? typeConfig.label || typeConfig.name : undefined);
-  /* v8 ignore start -- only read for a known type, which has its subfields */
-  const subFields = $derived((hasVariableTypes ? typeConfig?.fields : fields) ?? []);
-  /* v8 ignore stop */
+  const { typeConfig, unknownType, subFields } = $derived(
+    resolveVariableType({ types, fields, type }),
+  );
+  const label = $derived(typeConfig ? getFieldLabel({ config: typeConfig, locale }) : undefined);
 </script>
 
 {#if hasValues}
-  {#if hasVariableTypes && !typeConfig}
+  {#if unknownType}
     <!-- Unknown type: a warning is displayed in the editor -->
   {:else}
     <Subsection {label}>
       {#each subFields as subField (subField.name)}
         {@const subFieldKeyPath = `${keyPath}.${subField.name}`}
-        <VisibilityObserver>
-          <FieldPreview
-            keyPath={subFieldKeyPath}
-            typedKeyPath={hasVariableTypes && typeConfig?.name
-              ? `${typedKeyPath}<${typeConfig.name}>.${subField.name}`
-              : `${typedKeyPath}.${subField.name}`}
-            {locale}
-            fieldConfig={subField}
-          />
-        </VisibilityObserver>
+        <!-- Mark the subfield outside its observer, so that focusing it can scroll the preview to
+          it even before it’s rendered -->
+        <div role="none" data-lazy-key-path={subFieldKeyPath}>
+          <VisibilityObserver>
+            <FieldPreview
+              keyPath={subFieldKeyPath}
+              typedKeyPath={getTypedSubKeyPath({
+                typedKeyPath,
+                type: typeConfig?.name,
+                subFieldName: subField.name,
+              })}
+              {locale}
+              fieldConfig={subField}
+            />
+          </VisibilityObserver>
+        </div>
       {/each}
     </Subsection>
   {/if}

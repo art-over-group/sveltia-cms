@@ -17,10 +17,12 @@ import {
   getIndexFile,
   isCollectionIndexFile,
 } from '$lib/services/contents/collection/entries/index-file';
+import { getIdentifierFieldName } from '$lib/services/contents/collection/identifier';
 import { getField } from '$lib/services/contents/entry/fields';
 import { getEntryDirName } from '$lib/services/contents/entry/paths';
 import { getFieldDisplayValue } from '$lib/services/contents/entry/values';
 import { getOrCreate } from '$lib/services/utils/cache';
+import { getCommitAuthorName } from '$lib/services/utils/commit-author';
 
 /**
  * @import {
@@ -52,7 +54,8 @@ import { getOrCreate } from '$lib/services/utils/cache';
  * @property {FlattenedEntryContent} content Entry content.
  * @property {string} collectionName Collection name.
  * @property {ReplacerSubContext} replaceSubContext Context for the `replaceSub` function.
- * @property {InternalLocaleCode} defaultLocale Default locale.
+ * @property {InternalLocaleCode} locale Locale of the content, which a field value is displayed
+ * and transformed in: a DateTime field value may be written in it.
  * @property {string | undefined} [fallbackSummary] Fallback summary for the entry.
  */
 
@@ -112,6 +115,9 @@ const getBodyHeader = (markdown) =>
 /**
  * Parse the given entry summary as Markdown and sanitize HTML with a few exceptions if the Markdown
  * option is enabled. Also, parse HTML character references (entities).
+ * Without the Markdown option, the references are decoded after sanitizing, so the result can
+ * contain markup, e.g. `&lt;img&gt;` becomes `<img>`: it’s only safe as text, never with Svelte’s
+ * `@html` tag or `innerHTML`.
  * @param {string} str Original string.
  * @param {object} [options] Options.
  * @param {boolean} [options.allowMarkdown] Whether to allow Markdown and return HTML string.
@@ -209,7 +215,7 @@ export const replaceSub = (tag, context) => {
   }
 
   if (tag === 'commit_author') {
-    return commitAuthor?.name || commitAuthor?.login || commitAuthor?.email;
+    return getCommitAuthorName(commitAuthor);
   }
 
   return undefined;
@@ -229,14 +235,7 @@ let relationLabelResolved = false;
  * @returns {string} Replaced string.
  */
 export const replace = (placeholder, context) => {
-  const {
-    content: valueMap,
-    collectionName,
-    replaceSubContext,
-    defaultLocale,
-    fallbackSummary,
-  } = context;
-
+  const { content: valueMap, collectionName, replaceSubContext, locale, fallbackSummary } = context;
   const { value: tag, transformations: parsedTransformations } = parseTransformations(placeholder);
   const keyPath = stripFieldTagPrefix(tag);
   const getFieldArgs = { collectionName, valueMap, keyPath };
@@ -260,7 +259,7 @@ export const replace = (placeholder, context) => {
         relationLabelResolved = true;
       }
 
-      value = getFieldDisplayValue({ ...getFieldArgs, locale: defaultLocale });
+      value = getFieldDisplayValue({ ...getFieldArgs, locale });
     }
 
     // If the field is `title` and the value is empty, use the fallback summary if available
@@ -284,7 +283,7 @@ export const replace = (placeholder, context) => {
       fieldConfig: getField({ ...getFieldArgs }),
       value,
       transformations,
-      locale: defaultLocale,
+      locale,
     });
   }
 
@@ -341,14 +340,16 @@ const getEntriesGeneration = () => {
  * @param {boolean} [options.allowMarkdown] Whether to allow Markdown and return HTML string.
  * @param {string} [options.template] Summary template that overrides the collection’s `summary`
  * option.
+ * @param {boolean} [options.useIndexFileLabel] Whether to use the label of the collection’s index
+ * file as its summary. Default: `true`.
  * @returns {string} Formatted entry summary.
  */
 const formatEntrySummary = (
   collection,
   entry,
-  { locale, useTemplate = false, allowMarkdown = false, template } = {},
+  { locale, useTemplate = false, allowMarkdown = false, template, useIndexFileLabel = true } = {},
 ) => {
-  if (isCollectionIndexFile(collection, entry)) {
+  if (useIndexFileLabel && isCollectionIndexFile(collection, entry)) {
     return /** @type {string} */ (getIndexFile(collection)?.label);
   }
 
@@ -358,17 +359,20 @@ const formatEntrySummary = (
     _i18n: { defaultLocale },
   } = collection;
 
-  const {
-    _file: { basePath, fullPathRegEx } = {},
-    identifier_field: identifierField = 'title',
-    summary: collectionSummaryTemplate,
-  } = _type === 'entry' ? collection : {};
+  const { _file: { basePath, fullPathRegEx } = {}, summary: collectionSummaryTemplate } =
+    _type === 'entry' ? collection : {};
 
+  const identifierField = getIdentifierFieldName(_type === 'entry' ? collection : undefined);
   const summaryTemplate = template ?? collectionSummaryTemplate;
   const { locales, slug, commitDate, commitAuthor } = entry;
+  const requestedLocale = locale ?? defaultLocale;
 
-  const { content = {}, path: entryPath = '' } =
-    locales[locale ?? defaultLocale] ?? Object.values(locales)[0] ?? {};
+  // An entry may lack the locale, e.g. one only written in another locale
+  const contentLocale = Object.hasOwn(locales, requestedLocale)
+    ? requestedLocale
+    : (Object.keys(locales)[0] ?? requestedLocale);
+
+  const { content = {}, path: entryPath = '' } = locales[contentLocale] ?? {};
 
   const fallbackSummary =
     getEntrySummaryFromContent(content, { identifierField }) || slug.replaceAll('-', ' ');
@@ -391,7 +395,7 @@ const formatEntrySummary = (
       commitDate,
       commitAuthor,
     },
-    defaultLocale,
+    locale: contentLocale,
     fallbackSummary,
   };
 
@@ -419,14 +423,23 @@ const formatEntrySummary = (
  * available.
  * @param {boolean} [options.allowMarkdown] Whether to allow Markdown and return HTML string.
  * @param {string} [options.template] Summary template that overrides the collection’s `summary`
- * option. Used for the folder labels in a nested collection’s tree, which have their own
- * `nested.summary` option.
+ * option. Used for the folder labels in the tree of nested entries, which have their own
+ * `nested.summary` option, and the template columns of the entry list’s table view.
+ * @param {boolean} [options.useIndexFileLabel] Whether to use the label of the collection’s index
+ * file as its summary, instead of formatting it. Default: `true`. A table view column showing a
+ * template, such as `{{filename}}`, formats it for the index file too.
  * @returns {string} Formatted entry summary.
  * @see https://decapcms.org/docs/configuration-options/#summary
  * @see https://sveltiacms.app/en/docs/collections/entries/listings#summaries
  */
 export const getEntrySummary = (collection, entry, options = {}) => {
-  const { locale, useTemplate = false, allowMarkdown = false, template } = options;
+  const {
+    locale,
+    useTemplate = false,
+    allowMarkdown = false,
+    template,
+    useIndexFileLabel = true,
+  } = options;
 
   const optionCache = getOrCreate(
     getOrCreate(summaryCacheMap, entry, () => new WeakMap()),
@@ -441,6 +454,7 @@ export const getEntrySummary = (collection, entry, options = {}) => {
     useTemplate ? '1' : '0',
     allowMarkdown ? '1' : '0',
     template ?? '',
+    useIndexFileLabel ? '1' : '0',
     // `Array.join()` turns an unset locale into an empty string
     appLocale.current,
   ].join('\n');

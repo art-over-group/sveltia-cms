@@ -21,6 +21,7 @@ import { parseCmsConfig } from '$lib/services/config/parser';
 import { checkRootDirPaths } from '$lib/services/config/parser/root-dir';
 import { getConfigSchemas, validateConfigSchema } from '$lib/services/config/schema';
 import { allEntryFolders } from '$lib/services/contents';
+import { loadDayjsLocales } from '$lib/services/contents/fields/date-time/locales';
 import { prefs } from '$lib/services/user/prefs.svelte';
 
 /**
@@ -65,6 +66,7 @@ export const initCmsConfig = async (manualConfig) => {
     warnings: new Set(),
     mediaFields: new Set(),
     relationFields: new Set(),
+    formatLocales: new Set(),
   });
 
   try {
@@ -122,12 +124,20 @@ export const initCmsConfig = async (manualConfig) => {
     // opaque `null` origin of a `file:` page or a sandboxed frame, which leaves no base for links
     config._baseURL = isURL(config._siteURL) ? new URL(config._siteURL).origin : '';
 
-    // Handle root collection folder variants, particularly for VitePress
+    // Handle root collection folder variants, particularly for VitePress: `.`, `./` and `/` all
+    // mean the root folder. A leading `./` is removed from any other folder, e.g. `./content`
     config.collections?.forEach((collection) => {
-      if ('folder' in collection && (collection.folder === '.' || collection.folder === '/')) {
-        collection.folder = '';
+      // The JSON schema has checked that `folder` is a string
+      if ('folder' in collection) {
+        collection.folder = /** @type {string} */ (collection.folder)
+          .replace(/^\.(?:\/|$)/, '')
+          .replace(/^\/$/, '');
       }
     });
+
+    // DateTime field values are parsed and formatted synchronously, so the locales they’re written
+    // in have to be ready before the content is loaded
+    await loadDayjsLocales(collectors.formatLocales);
 
     cmsConfig.current = config;
     updateFolders(config);

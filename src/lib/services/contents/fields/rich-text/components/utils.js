@@ -1,3 +1,4 @@
+import { isInternalPropKey } from '$lib/services/contents/fields/internal-props';
 import { flattenKeys, unflattenKeys } from '$lib/services/utils/object';
 
 /**
@@ -122,7 +123,7 @@ export const normalizeProps = (props) =>
   unflattenKeys(
     Object.fromEntries(
       Object.entries(flattenKeys(props)).filter(
-        ([key]) => !key.split('.').pop()?.startsWith('__sc_'),
+        ([key]) => !isInternalPropKey(/** @type {string} */ (key.split('.').pop())),
       ),
     ),
   );
@@ -140,6 +141,39 @@ export const getParentComponentNames = (element) => {
   const container = element?.parentElement?.closest('[data-component-path]');
 
   return container ? JSON.parse(/** @type {string} */ (container.dataset.componentPath)) : [];
+};
+
+/**
+ * Follow whether the rich text editor the given component is in can’t be edited, which its textbox
+ * tells with the `aria-readonly` attribute. Lexical mounts each component outside the Svelte
+ * component tree, so the state can’t come from the context. Lexical also keeps applying updates
+ * while the editor isn’t editable, so the component has to hold back the changes itself.
+ * @param {Element | undefined} element Element of a component.
+ * @param {(readonly: boolean) => void} callback Function called with the state right away, and
+ * again whenever it changes.
+ * @returns {MutationObserver | undefined} Observer to disconnect once the component is gone, or
+ * `undefined` if the component isn’t in an editor.
+ */
+export const observeReadonly = (element, callback) => {
+  const textbox = element?.closest('[role="textbox"]');
+
+  if (!textbox) {
+    return undefined;
+  }
+
+  /**
+   * Call the function with the current state.
+   */
+  const update = () => {
+    callback(textbox.getAttribute('aria-readonly') === 'true');
+  };
+
+  const observer = new MutationObserver(update);
+
+  update();
+  observer.observe(textbox, { attributes: true, attributeFilter: ['aria-readonly'] });
+
+  return observer;
 };
 
 /**

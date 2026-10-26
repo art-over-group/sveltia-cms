@@ -15,9 +15,9 @@ import { fetchAPI, fetchGraphQL } from '$lib/services/backends/git/shared/api';
 
 // Mock dependencies
 vi.mock('$lib/services/backends/git/shared/api');
-vi.mock('@sveltia/i18n', () => ({
-  _: vi.fn(() => 'Translation message'),
-}));
+vi.mock('@sveltia/i18n', async () =>
+  (await import('$lib/test/i18n')).createI18nMock({ values: true }),
+);
 
 describe('GitLab repository service', () => {
   beforeEach(() => {
@@ -87,6 +87,14 @@ describe('GitLab repository service', () => {
       });
     });
 
+    test('encodes a branch name with a character that ends a URL path', () => {
+      const repoURL = 'https://gitlab.com/owner/repo';
+      const result = getBaseURLs(repoURL, 'cms/posts/c#');
+
+      expect(result.treeBaseURL).toBe(`${repoURL}/-/tree/cms/posts/c%23`);
+      expect(result.blobBaseURL).toBe(`${repoURL}/-/blob/cms/posts/c%23`);
+    });
+
     test('handles undefined branch', () => {
       const repoURL = 'https://gitlab.com/owner/repo';
       const result = getBaseURLs(repoURL, undefined);
@@ -113,18 +121,24 @@ describe('GitLab repository service', () => {
       expect(fetchGraphQL).toHaveBeenCalledWith(expect.stringContaining('pushCode'));
     });
 
-    test('throws error when the user has a role lower than Developer', async () => {
+    test('says write access is missing when the user has a role lower than Developer', async () => {
       vi.mocked(fetchGraphQL).mockResolvedValue({
         project: { userPermissions: { pushCode: false } },
       });
 
-      await expect(checkRepositoryAccess()).rejects.toThrow('Not a collaborator of the repository');
+      await expect(checkRepositoryAccess()).rejects.toMatchObject({
+        message: 'Not a collaborator of the repository',
+        cause: { message: 'repository_no_write_access:{"repo":"test-repo"}' },
+      });
     });
 
-    test('throws error when the project is not visible to the user', async () => {
+    test('says there is no access when the project is not visible to the user', async () => {
       vi.mocked(fetchGraphQL).mockResolvedValue({ project: null });
 
-      await expect(checkRepositoryAccess()).rejects.toThrow('Not a collaborator of the repository');
+      await expect(checkRepositoryAccess()).rejects.toMatchObject({
+        message: 'Not a collaborator of the repository',
+        cause: { message: 'repository_no_access:{"repo":"test-repo"}' },
+      });
     });
 
     test('reports a failed check rather than a raw error when the request fails', async () => {

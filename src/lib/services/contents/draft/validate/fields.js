@@ -14,12 +14,13 @@ import {
 import { isUniqueField, isValueTaken } from '$lib/services/contents/draft/validate/unique';
 import { DEFAULT_VALIDITY, finalizeValidity } from '$lib/services/contents/draft/validate/validity';
 import {
+  getDraftFieldArgs,
   getField,
   getFieldKind,
   isFieldMultiple,
   isFieldRequired,
-  LIST_KEY_PATH_REGEX,
 } from '$lib/services/contents/entry/fields';
+import { ITEM_INDEX_SUFFIX_REGEX } from '$lib/services/contents/entry/key-paths';
 import { MIN_MAX_VALUE_FIELD_TYPES } from '$lib/services/contents/fields';
 import { getCodeField } from '$lib/services/contents/fields/code/validate';
 import { isAutoNowField } from '$lib/services/contents/fields/date-time/auto-now';
@@ -28,9 +29,19 @@ import {
   PAIR_KEY_PATH_REGEX,
 } from '$lib/services/contents/fields/key-value/pairs';
 import { getListFieldInfo } from '$lib/services/contents/fields/list/helpers';
+import {
+  getMapKeyInfo,
+  getMapKeyPaths,
+  isArrayIndexKey,
+  isMapKeyTaken,
+} from '$lib/services/contents/fields/list/map';
 import { isAutoIncrementField } from '$lib/services/contents/fields/number/auto-increment';
-import { COMPONENT_NAME_PREFIX_REGEX } from '$lib/services/contents/fields/rich-text';
+import {
+  COMPONENT_NAME_PREFIX_REGEX,
+  stripComponentNamePrefix,
+} from '$lib/services/contents/fields/rich-text';
 import { isOptionValue } from '$lib/services/contents/fields/select/helpers';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
 import { isFieldI18nDisabled } from '$lib/services/contents/i18n/fields';
 
 /**
@@ -117,18 +128,14 @@ const recordValidationMessages = ({
  */
 export const validateAnyField = (args) => {
   const { draft, locale, valueMap, componentName, validities, enforceRequired = true } = args;
-  const { collection, collectionName, fileName, collectionFile, files, isIndexFile } = draft;
+  const { collection, files, isIndexFile } = draft;
   let { keyPath, value } = args;
 
-  /** @type {GetFieldArgs} */
-  const getFieldArgs = {
-    collectionName,
-    fileName,
-    componentName,
+  const getFieldArgs = getDraftFieldArgs(draft, {
+    keyPath: stripComponentNamePrefix(keyPath),
     valueMap,
-    keyPath: keyPath.replace(COMPONENT_NAME_PREFIX_REGEX, ''), // Remove component name prefix
-    isIndexFile,
-  };
+    componentName,
+  });
 
   const fieldConfig =
     getField({ ...getFieldArgs }) ??
@@ -153,7 +160,7 @@ export const validateAnyField = (args) => {
     MIN_MAX_VALUE_FIELD_TYPES.includes(fieldType) ? fieldConfig : {}
   );
 
-  const { i18nEnabled, defaultLocale } = (collectionFile ?? collection)._i18n;
+  const { i18nEnabled, defaultLocale } = getDraftI18nConfig(draft);
 
   // Skip validation on non-editable fields
   if (
@@ -184,6 +191,8 @@ export const validateAnyField = (args) => {
   }
 
   const required = isFieldRequired({ fieldConfig, locale });
+  // The key of an item of a List field stored as a map, which the configuration requires
+  const mapKeyInfo = getMapKeyInfo(getFieldArgs);
   /** @type {EntryValidityState} */
   const validity = { ...DEFAULT_VALIDITY };
   /** Whether the field holds no value at all, which each widget decides its own way. */
@@ -243,6 +252,13 @@ export const validateAnyField = (args) => {
     });
   }
 
+  // The key also has to be unique within the list, and can’t be a whole number, which a map moves
+  // to the front, so the items wouldn’t keep their order
+  if (!empty && mapKeyInfo) {
+    validity.mapKeyDuplicate = isMapKeyTaken({ ...mapKeyInfo, valueMap, keyPath, value });
+    validity.mapKeyNumeric = isArrayIndexKey(String(value));
+  }
+
   // Validate custom field if applicable (uses cached result)
   validateCustomField({ locale, keyPath, validity });
 
@@ -254,7 +270,9 @@ export const validateAnyField = (args) => {
   // `tooLong` and `rangeOverflow` are left alone — an empty field can’t trigger them — and
   // `customError` is a custom field component’s own call to make
   if (empty) {
-    relaxEmptyFieldValidity(validity, enforceRequired);
+    // A keyed list item without a key can’t be saved even as an Editorial Workflow draft, so the
+    // key is always enforced
+    relaxEmptyFieldValidity(validity, enforceRequired || !!mapKeyInfo);
   }
 
   return finalizeValidity(validity);
@@ -292,8 +310,8 @@ export const validateField = (args) => {
  * @param {FlattenedEntryContent} args.valueMap Entry values for the locale.
  */
 const revalidateSingleField = ({ draft, locale, keyPath, value, valueMap }) => {
-  const { collectionName, fileName, isIndexFile, validities, validationMessages } = draft;
-  const getFieldArgs = { collectionName, fileName, isIndexFile, keyPath, valueMap };
+  const { validities, validationMessages } = draft;
+  const getFieldArgs = getDraftFieldArgs(draft, { keyPath, valueMap });
   // A KeyValue pair is validated as part of its field, whose state is kept under the field’s own
   // key path, where the editor shows it. See `validateFields()`
   const keyValueField = getField(getFieldArgs) ? undefined : getKeyValueField(getFieldArgs);
@@ -352,13 +370,34 @@ const revalidateSingleField = ({ draft, locale, keyPath, value, valueMap }) => {
  * @param {FlattenedEntryContent} args.valueMap Entry values for the locale.
  */
 export const revalidateField = ({ draft, locale, keyPath, value, valueMap }) => {
-  const { collectionName, fileName, isIndexFile } = draft;
-
   revalidateSingleField({ draft, locale, keyPath, value, valueMap });
+
+  const mapKeyInfo = getMapKeyInfo(getDraftFieldArgs(draft, { keyPath, valueMap }));
+
+  // Changing the key of a keyed list item may make or break a duplicate with the other items. Only
+  // the items marked as a duplicate, or now having the same key, can be affected, so the others,
+  // which can be many in a large list, aren’t validated again on every keystroke
+  if (mapKeyInfo) {
+    getMapKeyPaths({ ...mapKeyInfo, valueMap }).forEach((otherKeyPath) => {
+      if (
+        otherKeyPath !== keyPath &&
+        (draft.validities?.[locale]?.[otherKeyPath]?.mapKeyDuplicate ||
+          String(valueMap[otherKeyPath]) === String(value))
+      ) {
+        revalidateSingleField({
+          draft,
+          locale,
+          keyPath: otherKeyPath,
+          value: valueMap[otherKeyPath],
+          valueMap,
+        });
+      }
+    });
+  }
 
   [...keyPath.matchAll(LIST_ITEM_INDEX_REGEX)].forEach(({ index }) => {
     const listKeyPath = keyPath.slice(0, index);
-    const getFieldArgs = { collectionName, fileName, isIndexFile, keyPath: listKeyPath, valueMap };
+    const getFieldArgs = getDraftFieldArgs(draft, { keyPath: listKeyPath, valueMap });
     const listFieldConfig = getField(getFieldArgs);
 
     // A multiple-value Select or Relation field stores its values like a List field without
@@ -425,7 +464,7 @@ export const validateList = ({ fieldConfig, validateArgs }) => {
 const getConfig = ({ getFieldArgs }, keyPath) =>
   getField({
     ...getFieldArgs,
-    keyPath: keyPath.replace(COMPONENT_NAME_PREFIX_REGEX, ''), // Remove component name prefix
+    keyPath: stripComponentNamePrefix(keyPath),
   });
 
 /**
@@ -543,7 +582,6 @@ const validateValueEntry = ({
   validationMessages,
   enforceRequired,
 }) => {
-  const { collectionName, fileName, isIndexFile } = draft;
   const [prefix] = keyPath.match(COMPONENT_NAME_PREFIX_REGEX) ?? [];
   const componentName = prefix ? valueMap[`${prefix}__sc_component_name`] : undefined;
 
@@ -561,14 +599,11 @@ const validateValueEntry = ({
   const context = {
     validateArgs: { draft, locale, valueMap, validities, enforceRequired, componentName },
     validationMessages,
-    getFieldArgs: {
-      collectionName,
-      fileName,
-      isIndexFile,
-      keyPath: keyPath.replace(COMPONENT_NAME_PREFIX_REGEX, ''), // Remove component name prefix
+    getFieldArgs: getDraftFieldArgs(draft, {
+      keyPath: stripComponentNamePrefix(keyPath),
       valueMap,
       componentName,
-    },
+    }),
   };
 
   // The items of a List field with subfields or types are flattened to their own subfields,
@@ -590,8 +625,8 @@ const validateValueEntry = ({
     }
   });
 
-  const listKeyPath = LIST_KEY_PATH_REGEX.test(keyPath)
-    ? keyPath.replace(LIST_KEY_PATH_REGEX, '')
+  const listKeyPath = ITEM_INDEX_SUFFIX_REGEX.test(keyPath)
+    ? keyPath.replace(ITEM_INDEX_SUFFIX_REGEX, '')
     : undefined;
 
   const listFieldConfig = listKeyPath === undefined ? undefined : getConfig(context, listKeyPath);

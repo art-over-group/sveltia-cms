@@ -47,10 +47,11 @@ const RatingControl = ({ forID, value, field, onChange, classNameWrapper }) =>
  * Render the editor within a draft.
  * @param {any} currentValue Field value.
  * @param {any} [control] Control component.
+ * @param {Record<string, any>} [context] Field editor context.
  * @returns {Promise<{ draft: any, props: any, entryDraft: any, unmount: () => void }>} Draft,
  * props, draft state and unmount function.
  */
-const renderEditor = async (currentValue, control = RatingControl) => {
+const renderEditor = async (currentValue, control = RatingControl, context = undefined) => {
   const draft = createMockDraft({
     fields: [fieldConfig],
     values: { _default: { stars: currentValue } },
@@ -63,6 +64,7 @@ const renderEditor = async (currentValue, control = RatingControl) => {
     currentValue,
     props: { control },
     draft,
+    context: context ? { 'field-editor': context } : undefined,
   });
 
   return { draft, props, entryDraft, unmount };
@@ -219,6 +221,43 @@ describe('CustomEditor', () => {
     expect(draft.currentValues._default['stars.y']).toBe(2);
   });
 
+  test('clears a non-primitive value, dropping its key paths', async () => {
+    /**
+     * A control storing a list, which it can clear.
+     * @param {any} props Control props.
+     * @returns {any} React element.
+     */
+    const TagsControl = ({ onChange }) => {
+      /**
+       * Report a list value.
+       * @returns {void} Nothing.
+       */
+      const set = () => onChange(['a', 'b']);
+      /**
+       * Clear the value.
+       * @returns {void} Nothing.
+       */
+      const clear = () => onChange(null);
+
+      return createElement(
+        'div',
+        null,
+        createElement('button', { type: 'button', onClick: set }, 'Set'),
+        createElement('button', { type: 'button', onClick: clear }, 'Clear'),
+      );
+    };
+
+    const { draft } = await renderEditor(undefined, TagsControl);
+
+    await page.getByRole('button', { name: 'Set' }).click();
+    await expect.poll(() => draft.currentValues._default['stars.1']).toBe('b');
+    await page.getByRole('button', { name: 'Clear' }).click();
+
+    // The items would otherwise still make up the old value, so the control couldn’t be cleared
+    await expect.poll(() => draft.currentValues._default.stars).toBeNull();
+    expect(Object.keys(draft.currentValues._default)).toEqual(['stars']);
+  });
+
   test('lets the control add a file to the draft', async () => {
     reports.length = 0;
 
@@ -269,6 +308,28 @@ describe('CustomEditor', () => {
     expect(reports[1].message).toBe('addFile() can only be called while an entry is being edited');
     expect(reports[2].message).toBe('pickFile() can only be called while an entry is being edited');
   });
+
+  // A List with a single subfield gives it a context of its own, which mustn’t hide the component
+  test.each(['rich-text-editor-component', 'single-subfield-list-field'])(
+    'encodes spaces in a picked URL within a rich text editor component (%s)',
+    async (fieldContext) => {
+      reports.length = 0;
+
+      await renderEditor(undefined, FileControl, { fieldContext, valueStoreKey: 'extraValues' });
+
+      await page.getByRole('button', { name: 'Pick' }).click();
+
+      const dialog = page.getByRole('dialog', { name: 'Select File' });
+
+      await dialog.getByRole('option', { name: 'Enter URL' }).click();
+      await dialog.getByRole('textbox').fill('https://example.com/my doc.pdf');
+      await dialog.getByRole('button', { name: 'Insert' }).click();
+
+      await expect
+        .poll(() => reports)
+        .toEqual([expect.objectContaining({ value: 'https://example.com/my%20doc.pdf' })]);
+    },
+  );
 
   test('registers the control instance for validation', async () => {
     const isValid = vi.fn(() => true);

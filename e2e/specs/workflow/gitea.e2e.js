@@ -1,6 +1,6 @@
 import { post } from '../../fixtures/configs/workflow.js';
 import { expect, GITEA_CONFIG, test } from '../../fixtures/test.js';
-import { getEditor, openEntry } from '../../fixtures/ui.js';
+import { getEditor, getEntryRows, openEntry } from '../../fixtures/ui.js';
 
 /**
  * @import { Locator, Page } from '@playwright/test';
@@ -108,9 +108,7 @@ test('saves a new entry to a branch and opens a work-in-progress pull request', 
   );
   // Nothing is published yet
   expect(gitea.head.oid).toBe(mainBefore);
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toContainText([
-    /Second Post.*Draft/,
-  ]);
+  await expect(getEntryRows(page)).toContainText([/Second Post.*Draft/]);
 });
 
 test('creates the status label the instance doesn’t have yet', async ({ cms, gitea, page }) => {
@@ -174,11 +172,54 @@ test('moves an entry through the review stages', async ({ cms, gitea, page }) =>
 
   await cms.changeStatus(/Status: .*In Review/, 'Ready');
   await expect.poll(() => pullRequest.labels).toEqual(['sveltia-cms/pending_publish']);
+  // The pull request is the user’s own, which the Gitea doesn’t let them approve
+  expect(pullRequest.approvals).toBeUndefined();
 
   await cms.changeStatus(/Status: .*Ready/, 'Draft');
   await expect
     .poll(() => ({ labels: pullRequest.labels, title: pullRequest.title }))
     .toEqual({ labels: ['sveltia-cms/draft'], title: 'WIP: Update Post “second-post”' });
+});
+
+test('approves a colleague’s pull request while it’s marked as ready', async ({
+  cms,
+  gitea,
+  page,
+}) => {
+  const pullRequest = openEntryPullRequest(gitea, {
+    slug: 'second-post',
+    files: { 'content/posts/second-post.md': post('Second Post', 'Coming soon.') },
+    status: 'pending_review',
+  });
+
+  pullRequest.author = gitea.colleague;
+
+  await cms.open();
+  await openEntry(page, 'Second Post');
+  await cms.changeStatus(/Status: .*In Review/, 'Ready');
+
+  // The approval is pinned to the commit the entry was reviewed at
+  await expect
+    .poll(() => pullRequest.approvals)
+    .toEqual([
+      expect.objectContaining({
+        login: gitea.user.login,
+        commitId: gitea.getPullRequestHeadSHA(pullRequest),
+      }),
+    ]);
+
+  // Moving the entry back withdraws the approval
+  await cms.changeStatus(/Status: .*Ready/, 'In Review');
+  await expect.poll(() => pullRequest.approvals).toEqual([]);
+
+  // Moving the entry between the other stages approves nothing
+  await cms.changeStatus(/Status: .*In Review/, 'Draft');
+  await expect.poll(() => pullRequest.labels).toEqual(['sveltia-cms/draft']);
+  expect(pullRequest.approvals).toEqual([]);
+
+  // Marking it as ready again approves it again
+  await cms.changeStatus(/Status: .*Draft/, 'Ready');
+  await expect.poll(() => pullRequest.approvals).toHaveLength(1);
 });
 
 test('keeps the other labels of a pull request', async ({ cms, gitea, page }) => {
@@ -219,7 +260,7 @@ test('lists entries in every status on the board', async ({ cms, gitea, page }) 
 
   await cms.open();
 
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+  await expect(getEntryRows(page)).toHaveText([
     /Unpublished Entries/,
     /Fourth Post.*Ready/,
     /Second Post.*Draft/,
@@ -392,10 +433,7 @@ test('takes a pull request merged on the instance as published', async ({ cms, g
   // The entry is live, so publishing carries on rather than reporting a failure: the branch is
   // tidied up and the entry is listed as published rather than kept in a stage on the board
   await expect.poll(() => gitea.refs.has('cms/posts/second-post')).toBe(false);
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-    /Second Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/, /Second Post/]);
   await expect(page.getByRole('radio', { name: 'Editorial Workflow' })).toBeVisible();
   await page.getByRole('radio', { name: 'Editorial Workflow' }).click();
 
@@ -519,9 +557,7 @@ test('leaves a pull request from a fork off the board', async ({ cms, gitea, pag
 
   await cms.open();
 
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
   await expect(page.getByRole('radio', { name: 'Editorial Workflow' })).toBeVisible();
   await page.getByRole('radio', { name: 'Editorial Workflow' }).click();
 
@@ -551,9 +587,7 @@ test('drops a labelled pull request moved to another base branch from the board'
   await cms.open();
 
   // The entry isn’t listed as unpublished, and the board has nothing on it
-  await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
-    /First Post/,
-  ]);
+  await expect(getEntryRows(page)).toHaveText([/First Post/]);
   await page.getByRole('radio', { name: 'Editorial Workflow' }).click();
 
   const board = page.getByRole('group', { name: 'Editorial Workflow' });
@@ -742,7 +776,7 @@ test.describe('without a configured branch', () => {
     await cms.open();
 
     // The pull requests can only be told apart from someone else’s once the default branch is known
-    await expect(page.getByRole('grid', { name: 'Entries' }).getByRole('row')).toHaveText([
+    await expect(getEntryRows(page)).toHaveText([
       /Unpublished Entries/,
       /Second Post.*Draft/,
       /Published Entries/,

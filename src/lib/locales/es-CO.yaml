@@ -1091,7 +1091,7 @@ edit_slug_error:
   invalid: El slug no puede contener caracteres especiales, incluidas las barras y los espacios.
   duplicate: Este slug ya se usa para otra entrada.
 
-# Entry path editing in a nested collection
+# Entry path editing for nested entries
 # Heading for the parent folder picker shown when the `meta.path` option is enabled
 entry_parent_folder: Carpeta principal
 new_parent_folder: Nueva carpeta
@@ -1565,7 +1565,7 @@ config:
     oauth_implicit_flow: El método de autenticación configurado (flujo implícito) no es compatible con Sveltia CMS. Usa un <a>método de autenticación</a> diferente en su lugar.
     github_pkce_unsupported: La autorización PKCE aún no es compatible debido a las limitaciones de GitHub. Usa un <a>método de autenticación</a> diferente en su lugar.
     oauth_no_app_id: No se ha definido el ID de la aplicación OAuth.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: La opción `open_authoring` requiere el modo de publicación `editorial_workflow`. Consulta la <a>documentación</a> para más detalles.
     # Don’t localize `auth_methods`
     no_auth_methods: La opción `auth_methods` debe contener al menos un método.
@@ -1979,26 +1979,8 @@ prefs:
       description: Mostrar el subrayado de los enlaces en la vista previa de la entrada y en las etiquetas de la interfaz de usuario.
       switch_label: Subrayar siempre los enlaces
 
-  # Advanced panel
-  advanced:
-    title: Avanzado
-    beta:
-      title: Funciones beta
-      description: Habilitar algunas funciones beta que pueden ser inestables o no estar traducidas.
-      switch_label: Unirse al programa beta
-    deploy_hook:
-      title: Hook de despliegue
-      description: Ingresa una URL de webhook que se llamará cuando actives manualmente un despliegue seleccionando Publicar cambios. Puedes dejarlo en blanco si usas GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: URL del hook
-        saved: URL del hook guardada.
-        removed: URL del hook eliminada.
-      # Authorization header input
-      auth:
-        field_label: Encabezado de autorización (p. ej., Bearer <token>) (opcional)
-        saved: Encabezado de autorización guardado.
-        removed: Encabezado de autorización eliminado.
+  # Data Management panel
+  data:
     clear_data:
       title: Borrar datos
       # Clear File Cache button
@@ -2018,6 +2000,19 @@ prefs:
       title: Modo de desarrollador
       description: Habilitar algunas funciones orientadas a desarrolladores, incluidos registros detallados en la consola y menús contextuales nativos.
       switch_label: Habilitar el modo de desarrollador
+    deploy_hook:
+      title: Hook de despliegue
+      description: Ingresa una URL de webhook que se llamará cuando actives manualmente un despliegue seleccionando Publicar cambios. Puedes dejarlo en blanco si usas GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: URL del hook
+        saved: URL del hook guardada.
+        removed: URL del hook eliminada.
+      # Authorization header input
+      auth:
+        field_label: Encabezado de autorización (p. ej., Bearer <token>) (opcional)
+        saved: Encabezado de autorización guardado.
+        removed: Encabezado de autorización eliminado.
 
 # ==============================================================================
 # Keyboard Shortcuts

@@ -2,14 +2,16 @@ import { getPathInfo } from '@sveltia/utils/file';
 import equal from 'fast-deep-equal';
 
 import { getAssetsByDirName } from '$lib/services/assets';
-import { formatFileName } from '$lib/services/assets/file-name';
+import { formatFileName, isSameFileName } from '$lib/services/assets/file-name';
 import { getAssetKind } from '$lib/services/assets/kinds';
 import { getPendingFileName } from '$lib/services/assets/name';
 import { assertOutsideCmsFolders } from '$lib/services/assets/reserved';
+import { advancePreparing } from '$lib/services/backends/commit-progress';
 import { fillTemplate } from '$lib/services/common/template';
 import { getSharedEntryFileName } from '$lib/services/contents/collection/nested';
 import { createEntryPath } from '$lib/services/contents/draft/save/entry-path';
 import { getFillSlugOptions } from '$lib/services/contents/draft/slugs';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
 import {
   createPath,
   encodeFilePath,
@@ -67,8 +69,8 @@ const fillTemplateIfNeeded = (pathString, fillSlugOptions) =>
   pathString.includes('{{') ? fillTemplate(pathString, fillSlugOptions) : pathString;
 
 /**
- * Check whether an entry file is the index file that every entry in a nested collection is stored
- * as, which makes the folder holding it the entry’s own.
+ * Check whether an entry file is the index file that every entry in a collection with nested
+ * entries is stored as, which makes the folder holding it the entry’s own.
  * @param {string} filePath Entry file path without its extension.
  * @param {string | undefined} indexFileName Shared index file name, if the collection has one.
  * @returns {boolean} Result.
@@ -98,9 +100,9 @@ const isSharedIndexFile = (filePath, indexFileName) => {
  * getOwnedEntryFolderPath(collection, 'content/blog/hello-world/index.md') // `{{slug}}/index`
  * // => 'content/blog/hello-world'
  * @example
- * // Every entry in a nested collection is an index file, with or without a `path` option
- * getOwnedEntryFolderPath(collection, 'content/pages/about/_index.md') // `index_file: _index`
- * // => 'content/pages/about'
+ * // Every entry in a collection with nested entries is an index file, with or without a `path`
+ * option getOwnedEntryFolderPath(collection, 'content/pages/about/_index.md') // `index_file:
+ * _index` // => 'content/pages/about'
  * @example
  * // The slug is the last segment here, so the entry file sits next to the folder named after it
  * // with a `{{year}}/{{month}}/{{slug}}` path option
@@ -348,7 +350,7 @@ export const getAssetSavingInfo = ({
   folder,
   subfolderPath = '',
 }) => {
-  const { collection, collectionFile, collectionName } = draft;
+  const { collectionName } = draft;
   let assetFolderPaths = getAssetFolderPaths({ draft, locale, slug, defaultLocaleSlug, folder });
 
   if (subfolderPath) {
@@ -362,7 +364,7 @@ export const getAssetSavingInfo = ({
   }
 
   const { resolvedInternalPath } = assetFolderPaths;
-  const _locale = locale ?? (collectionFile ?? collection)._i18n.defaultLocale;
+  const _locale = locale ?? getDraftI18nConfig(draft).defaultLocale;
 
   const vacatedFolderPath = folder.entryRelative
     ? getVacatedAssetFolderPath({
@@ -427,6 +429,8 @@ export const replaceBlobURL = async ({
 }) => {
   const sha = await getGitHash(file);
 
+  advancePreparing();
+
   const {
     savingAssetProps,
     assetNamesInSameFolder,
@@ -440,9 +444,13 @@ export const replaceBlobURL = async ({
   );
 
   // The same file picked for another field or locale is saved once, as long as it goes to the same
-  // place: the same folder, and the same subfolder in it
+  // place: the same folder, and the same subfolder in it. A file replacing an existing one must
+  // keep its name, so an identical file saved under another name doesn’t count
   const dupFile = savingAssetsInSameFolder.find(
-    (f) => f.sha === sha && (!folder.entryRelative || equal(f.folder, folder)),
+    (f) =>
+      f.sha === sha &&
+      (!folder.entryRelative || equal(f.folder, folder)) &&
+      (!replace || isSameFileName(f.name, file.name)),
   );
 
   let fileName = '';

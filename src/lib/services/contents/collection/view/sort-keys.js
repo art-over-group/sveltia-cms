@@ -6,7 +6,10 @@ import { selectedCollection } from '$lib/services/contents/collection';
 import { getOrderFieldKey } from '$lib/services/contents/collection/entries/reorder/config';
 import { isArrayFileCollection } from '$lib/services/contents/collection/predicates';
 import { parseCustomSortableFields } from '$lib/services/contents/collection/view/options';
+import { SUMMARY_COLUMN_KEY } from '$lib/services/contents/collection/view/table-keys';
 import { getField } from '$lib/services/contents/entry/fields';
+import { storesNumber } from '$lib/services/contents/fields/number/helpers';
+import { getLocalizedOption } from '$lib/services/contents/i18n/options';
 import { isNumeric } from '$lib/services/utils/number';
 import { createDerivedState } from '$lib/services/utils/state.svelte';
 
@@ -17,7 +20,7 @@ import { createDerivedState } from '$lib/services/utils/state.svelte';
  * SortKey,
  * SortOrder,
  * } from '$lib/types/private';
- * @import { Field, FieldKeyPath, NumberField } from '$lib/types/public';
+ * @import { Field, FieldKeyPath } from '$lib/types/public';
  */
 
 /**
@@ -49,7 +52,7 @@ export const SPECIAL_SORT_KEY_TYPES = {
   slug: String,
   commit_author: String,
   commit_date: Date,
-  _summary: String,
+  [SUMMARY_COLUMN_KEY]: String,
   _manual: String,
 };
 
@@ -110,7 +113,7 @@ export const getSortConfig = ({ collection, isCommitAuthorAvailable, isCommitDat
   // Special handling for summary field: if the collection has a summary template defined, we add
   // `_summary` as a special sort key, which uses the generated summary value
   if (summaryTemplate) {
-    keys.unshift('_summary');
+    keys.unshift(SUMMARY_COLUMN_KEY);
   }
 
   // Make sure the keys are valid field keys or special keys. The canonical slug key,
@@ -193,12 +196,9 @@ export const getSortKeyType = ({ key, fieldConfig }) => {
     return Boolean;
   }
 
-  if (fieldConfig?.widget === 'number') {
-    const { value_type: valueType = 'int' } = /** @type {NumberField} */ (fieldConfig);
-
-    if (valueType === 'int' || valueType === 'float') {
-      return Number;
-    }
+  // A Compute field yielding a number has the same `value_type` option, but defaults to `string`
+  if (fieldConfig && storesNumber(fieldConfig)) {
+    return Number;
   }
 
   return String;
@@ -226,16 +226,17 @@ export const getSortKeyLabel = ({ collection, key }) => {
         }
 
         const keyPath = arr.slice(0, index + 1).join('.');
+        const field = getField({ collectionName: collection.name, keyPath });
 
-        // @ts-ignore Hidden field doesn’t have `label` property
-        return getField({ collectionName: collection.name, keyPath })?.label || _key;
+        return getLocalizedOption({ config: field, option: 'label' }) || _key;
       })
       .filter(Boolean)
       .join(' – ');
   }
 
-  // @ts-ignore Hidden field doesn’t have `label` property
-  return collection.fields?.find(({ name }) => name === key)?.label || key;
+  const field = collection.fields?.find(({ name }) => name === key);
+
+  return getLocalizedOption({ config: field, option: 'label' }) || key;
 };
 
 /**

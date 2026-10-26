@@ -7,11 +7,12 @@ import { createProxy, isDuplicatedField } from '$lib/services/contents/draft/cre
 import { fillUuidValues } from '$lib/services/contents/draft/create/uuid';
 import { showDuplicateToast } from '$lib/services/contents/editor';
 import { getAliasesKey, removeAliases } from '$lib/services/contents/entry/aliases';
-import { getField } from '$lib/services/contents/entry/fields';
+import { getDraftFieldArgs, getField } from '$lib/services/contents/entry/fields';
 import { hasUuidTag } from '$lib/services/contents/fields/compute/helpers';
 import { getDefaultValueMap as getHiddenFieldDefaultValueMap } from '$lib/services/contents/fields/hidden/defaults';
 import { getInitialValue as getInitialUuidValue } from '$lib/services/contents/fields/uuid/helpers';
-import { isFieldLocalized, isFieldTranslatable } from '$lib/services/contents/i18n/fields';
+import { getDraftI18nConfig } from '$lib/services/contents/i18n/config';
+import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
 import { createState, getSnapshot } from '$lib/services/utils/state.svelte';
 
 /**
@@ -114,14 +115,14 @@ export const resetUniqueValues = ({
 
     // A Compute field keeps the UUIDs found in its current value when it’s resolved again, so the
     // value has to be cleared for the duplicate to get UUIDs of its own. The field is resolved as
-    // soon as the new draft is in place
+    // soon as the new draft is in place. A duplicated field is left alone in the other locales, as
+    // the default locale’s new value is copied to them, so every locale shares the same UUIDs
     if (
       fieldConfig?.widget === 'compute' &&
-      hasUuidTag(/** @type {ComputeField} */ (fieldConfig).value)
+      hasUuidTag(/** @type {ComputeField} */ (fieldConfig).value) &&
+      (locale === defaultLocale || isFieldTranslatable(fieldConfig.i18n))
     ) {
-      if (locale === defaultLocale || isFieldLocalized(fieldConfig?.i18n)) {
-        valueMap[keyPath] = '';
-      }
+      valueMap[keyPath] = '';
     }
 
     const hidden = findHiddenField({ ...getFieldArgs, keyPath });
@@ -265,14 +266,14 @@ export const createDuplicateDraftState = ({ draft, currentValues, files }) => {
  */
 export const duplicateDraft = async (entryDraft) => {
   const draft = /** @type {EntryDraft} */ (entryDraft.current);
-  const { collectionName, fileName, collection, collectionFile, fields, isIndexFile } = draft;
+  const { collection, fields } = draft;
 
   const {
     defaultLocale,
     canonicalSlug: { key: canonicalSlugKey },
-  } = (collectionFile ?? collection)._i18n;
+  } = getDraftI18nConfig(draft);
 
-  const getFieldArgs = { collectionName, fileName, isIndexFile };
+  const getFieldArgs = getDraftFieldArgs(draft);
   const orderFieldKey = getOrderFieldKey(collection);
   const aliasesKey = getAliasesKey({ collection, fields });
 

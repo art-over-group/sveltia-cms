@@ -115,6 +115,15 @@ export const getDefaultAssetFolder = (folderMap) =>
   /** @type {AssetFolderInfo} */ (Object.values(folderMap).find(({ enabled }) => enabled)?.folder);
 
 /**
+ * Get the folder the field editor puts a newly picked file in, i.e. The default asset library
+ * folder of a File/Image field, so a copy of a file ends up in the same place.
+ * @param {Parameters<typeof getAssetLibraryFolderMap>[0]} args Arguments. See
+ * {@link getAssetLibraryFolderMap}.
+ * @returns {AssetFolderInfo} Folder.
+ */
+export const getFieldAssetFolder = (args) => getDefaultAssetFolder(getAssetLibraryFolderMap(args));
+
+/**
  * Get the target folder path for a File/Image field.
  * @param {object} args Arguments.
  * @param {Entry | undefined} args.entry Original entry.
@@ -222,7 +231,8 @@ export const getUnsavedFileDisplayPath = ({ draft, blobURL, fileName }) => {
  * the file name. It’s empty for an empty value or a blob URL not referring to an unsaved file.
  */
 export const getFileDisplayPath = ({ draft, value, unsavedFileName }) => {
-  if (!value) {
+  // A value read from a file may be a number or another non-string value
+  if (!value || typeof value !== 'string') {
     return '';
   }
 

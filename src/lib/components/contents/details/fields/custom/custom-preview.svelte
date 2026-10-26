@@ -1,6 +1,7 @@
 <!--
   @component
-  Render a custom field preview registered via `CMS.registerFieldType()`.
+  Render a custom field preview registered via `CMS.registerFieldType()`, or the summary component
+  of a custom field type for a collapsed List field item, which receives the same props.
   @see https://decapcms.org/docs/custom-widgets/
   @see https://sveltiacms.app/en/docs/api/field-types
 -->
@@ -11,13 +12,12 @@
   import { assetURLUpdates } from '$lib/services/api/asset-proxy';
   import { fieldStateContext } from '$lib/services/api/field-state';
   import { immutableLoaded, loadImmutable } from '$lib/services/api/immutable';
-  import { getReactDom, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
+  import { createReactRoot, loadReactDom, reactDomLoaded } from '$lib/services/api/react-dom';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
   import { getValueMapSnapshot } from '$lib/services/contents/draft/value-map.svelte';
   import { buildPreviewProps } from '$lib/services/contents/fields/custom/preview';
 
   /**
-   * @import { Root } from 'react-dom/client';
    * @import { FieldPreviewProps } from '$lib/types/private';
    * @import { CustomField, CustomFieldPreview } from '$lib/types/public';
    */
@@ -26,7 +26,7 @@
    * @typedef {object} Props
    * @property {CustomField} fieldConfig Field configuration.
    * @property {any} currentValue Current field value.
-   * @property {CustomFieldPreview} preview React component for preview.
+   * @property {CustomFieldPreview} preview React component for preview, or a summary component.
    */
 
   const entryDraft = getEntryDraftContext();
@@ -47,7 +47,7 @@
   /**
    * React root, created on the first render. Not reactive, as the effect rendering the component
    * assigns it, and would otherwise run again right away.
-   * @type {Root | undefined}
+   * @type {ReturnType<typeof createReactRoot> | undefined}
    */
   let reactRoot;
 
@@ -70,7 +70,7 @@
     });
 
     if (props) {
-      reactRoot ??= getReactDom().createRoot(container);
+      reactRoot ??= createReactRoot(container);
 
       // Provide the state of this field to any built-in field preview reused within the custom
       // preview, which is typically given an ad hoc field configuration that doesn’t describe it
@@ -119,7 +119,9 @@
 
 <style>
   div {
-    /* Allow the React component to use the full width */
+    /* Allow the React component to use the full width, but let it shrink beside a list item
+      thumbnail rather than overflow */
     width: 100%;
+    min-width: 0;
   }
 </style>

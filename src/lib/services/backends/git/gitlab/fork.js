@@ -5,13 +5,15 @@ import {
   repository,
 } from '$lib/services/backends/git/gitlab/repository';
 import { fetchAPI } from '$lib/services/backends/git/shared/api';
+import { fetchAPIOrUndefined } from '$lib/services/backends/git/shared/api-optional';
 import {
   createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createNoAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
   isOpenAuthoringConfiguredFor,
   pollForFork,
+  requestForkWithFallbackName,
   resolveWorkflowRepository,
   runOpenAuthoringSetUp,
   setUpForkFor,
@@ -87,9 +89,7 @@ export const fetchRepositoryAccess = async () => {
   // the sign-in flow looks for to drop the cached credentials, the same as the regular access check
   // does, so the user gets the sign-in form rather than the same error on every reload
   if (!permissions.found) {
-    throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', {
-      repo: repoPath,
-    });
+    throw createNoAccessError(repoPath);
   }
 
   return { canWrite: permissions.canPush };
@@ -138,15 +138,15 @@ export const fetchProjectDetails = async () => {
 export const fetchForkByName = async () => {
   const { owner, repo } = repository;
   const userName = /** @type {string} */ (user.account?.login);
-  /** @type {Record<string, any>} */
-  let result;
 
-  try {
-    result = /** @type {Record<string, any>} */ (
-      await fetchAPI(`/projects/${getProjectId({ owner: userName, repo })}`)
-    );
-  } catch {
-    // The contributor has no project of that name, which is the common case on a first visit
+  // The contributor has no project of that name, which is the common case on a first visit. Only
+  // that means there’s no fork at the path: reading a rate limit or an outage the same way would
+  // have the contributor asked to create another one, so that is passed on
+  const result = /** @type {Record<string, any> | undefined} */ (
+    await fetchAPIOrUndefined(`/projects/${getProjectId({ owner: userName, repo })}`)
+  );
+
+  if (!result) {
     return undefined;
   }
 
@@ -170,35 +170,31 @@ export const fetchForkByName = async () => {
 
 /**
  * Ask the configured project for the fork the signed-in user owns, wherever it’s named. This only
- * runs when {@link fetchForkByName} came up empty, so its worst case is the behavior without it: no
- * fork found, and the contributor asked whether to make one.
+ * runs when {@link fetchForkByName} came up empty. A failure to read the list is passed on rather
+ * than taken for no fork, which would have the contributor asked to create another one.
  * @returns {Promise<RepositoryPath | undefined>} The fork, or `undefined` if there is none.
  * @see https://docs.gitlab.com/api/project_forks/#list-forks-of-a-project
  */
 export const fetchForkFromNetwork = async () => {
   const userName = user.account?.login;
 
-  try {
-    const forks = /** @type {Record<string, any>[]} */ (
-      await fetchAPI(`/projects/${getProjectId()}/forks?owned=true&per_page=${MAX_FORKS}`)
-    );
+  const forks = /** @type {Record<string, any>[]} */ (
+    await fetchAPI(`/projects/${getProjectId()}/forks?owned=true&per_page=${MAX_FORKS}`)
+  );
 
-    // Check the namespace rather than trusting the filter to have applied: committing to a fork in
-    // a group the contributor merely belongs to would put their drafts somewhere unexpected
-    const fork = forks.find(
-      ({ namespace }) => namespace?.kind === 'user' && namespace?.full_path === userName,
-    );
+  // Check the namespace rather than trusting the filter to have applied: committing to a fork in
+  // a group the contributor merely belongs to would put their drafts somewhere unexpected
+  const fork = forks.find(
+    ({ namespace }) => namespace?.kind === 'user' && namespace?.full_path === userName,
+  );
 
-    if (!fork) {
-      return undefined;
-    }
-
-    projectIds.fork = fork.id;
-
-    return parseProjectPath(fork.path_with_namespace);
-  } catch {
+  if (!fork) {
     return undefined;
   }
+
+  projectIds.fork = fork.id;
+
+  return parseProjectPath(fork.path_with_namespace);
 };
 
 /**
@@ -218,7 +214,7 @@ const FORK_READY_STATUSES = ['none', 'finished'];
  * background and the request returns before the copy is complete, so committing to it right away
  * could fail.
  * @param {RepositoryPath} fork Fork to wait for.
- * @param {number} [attemptsLeft] Number of attempts remaining, used for the recursive retry.
+ * @param {number} [attemptsLeft] Number of checks at most, including the first one.
  * @throws {Error} When the fork hasn’t become available within the allotted time, or the import
  * failed outright.
  * @see https://docs.gitlab.com/api/project_import_export/#import-status
@@ -284,44 +280,27 @@ const isForkPathTaken = async () => {
 export const createFork = async () => {
   const { owner, repo } = repository;
   const endpoint = `/projects/${getProjectId()}/fork`;
-  /** @type {Record<string, any>} */
-  let result;
+  // A path can’t hold a slash, which a project in a subgroup has in its namespace
+  const name = `${owner.replaceAll('/', '-')}-${repo}`;
 
-  /**
-   * Log the given failure and create an error that tells the user the fork couldn’t be made.
-   * @param {Error} ex Failure.
-   * @returns {Error} Error to throw.
-   */
-  const createForkError = (ex) => {
-    // eslint-disable-next-line no-console
-    console.error('Failed to fork the repository.', ex);
-
-    return createLocalizedError('Failed to fork the repository.', 'open_authoring.fork_failed', {
-      repo: `${owner}/${repo}`,
-    });
-  };
-
-  try {
-    result = /** @type {Record<string, any>} */ (await fetchAPI(endpoint, { method: 'POST' }));
-  } catch (/** @type {any} */ ex) {
+  const result = await requestForkWithFallbackName({
+    repoPath: `${owner}/${repo}`,
+    /**
+     * Request a fork at the default path.
+     * @returns {Promise<any>} New fork.
+     */
+    requestFork: () => fetchAPI(endpoint, { method: 'POST' }),
+    /**
+     * Request a fork named after the configured project’s namespace and name.
+     * @returns {Promise<any>} New fork.
+     */
+    requestRenamedFork: () => fetchAPI(endpoint, { method: 'POST', body: { name, path: name } }),
     // GitLab refuses a name or path that has already been taken in the namespace with 409 Conflict,
     // or with 400 Bad Request on some versions. The lookup tells that from any other failure, such
     // as forking being turned off
-    if (![400, 409].includes(ex.cause?.status) || !(await isForkPathTaken())) {
-      throw createForkError(ex);
-    }
-
-    // A path can’t hold a slash, which a project in a subgroup has in its namespace
-    const name = `${owner.replaceAll('/', '-')}-${repo}`;
-
-    try {
-      result = /** @type {Record<string, any>} */ (
-        await fetchAPI(endpoint, { method: 'POST', body: { name, path: name } })
-      );
-    } catch (/** @type {any} */ retryEx) {
-      throw createForkError(retryEx);
-    }
-  }
+    conflictStatuses: [400, 409],
+    isNameTaken: isForkPathTaken,
+  });
 
   const fork = parseProjectPath(result.path_with_namespace);
 

@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
 import { backend, backendName } from '$lib/services/backends';
-import { mergeLockedBranch } from '$lib/services/backends/branch-access';
+import { lockedBranch, mergeLockedBranch } from '$lib/services/backends/branch-access';
 import { cmsConfig } from '$lib/services/config';
 import { allEntries } from '$lib/services/contents';
 import { createDerivedState } from '$lib/services/utils/state.svelte';
 import {
   canMergePullRequest,
   checkPublishedVersion,
+  getCompanionEntries,
   getPublishedVersion,
   getUnpublishedEntriesByCollection,
   getUnpublishedEntry,
   getUnpublishedEntryByBranch,
   getUnpublishedEntryByDraft,
+  getUnpublishedEntryById,
   getUnpublishedEntryBySlug,
   hasPublishedVersion,
+  isDirectPublishAllowed,
   isPendingDeletion,
   isPublishAllowed,
   isWorkflowDraft,
@@ -243,6 +246,44 @@ describe('workflow/index', () => {
     });
   });
 
+  describe('getCompanionEntries', () => {
+    const guides = /** @type {any} */ ({ id: 'guides' });
+    const help = /** @type {any} */ ({ id: 'help' });
+    const jane = /** @type {any} */ ({ id: 'jane' });
+
+    /**
+     * Create an entry with new entries riding along in its pull request.
+     * @param {any[]} [companions] Companion entries.
+     * @returns {any} Unpublished entry.
+     */
+    const createHost = (companions) => ({
+      ...createEntry({ collectionName: 'posts', subPath: 'a' }),
+      workflow: { collectionName: 'posts', companions },
+    });
+
+    test('collects the entries of the collection from every pull request', () => {
+      unpublishedEntries.current = [
+        createHost([
+          { collectionName: 'sections', entry: guides },
+          { collectionName: 'authors', entry: jane },
+        ]),
+        createHost(),
+        createHost([{ collectionName: 'sections', entry: help }]),
+      ];
+
+      expect(getCompanionEntries('sections')).toEqual([guides, help]);
+      expect(getCompanionEntries('tags')).toEqual([]);
+    });
+
+    test('looks in the given entries only', () => {
+      const host = createHost([{ collectionName: 'sections', entry: help }]);
+
+      unpublishedEntries.current = [createHost([{ collectionName: 'sections', entry: guides }])];
+
+      expect(getCompanionEntries('sections', [host])).toEqual([help]);
+    });
+  });
+
   describe('getUnpublishedEntry', () => {
     test('finds the entry by collection name and sub path', () => {
       unpublishedEntries.current = [
@@ -370,6 +411,20 @@ describe('workflow/index', () => {
 
       expect(getUnpublishedEntryByBranch('cms/posts/hello')).toBe(entry);
       expect(getUnpublishedEntryByBranch('cms/posts/hello-2')).toBeUndefined();
+    });
+  });
+
+  describe('getUnpublishedEntryById', () => {
+    test('finds the current entry in the store by its ID', () => {
+      const entry = createEntry({ collectionName: 'posts', subPath: 'hello' });
+
+      unpublishedEntries.current = [entry];
+
+      // A copy held since an action started resolves to the entry in the store now
+      expect(getUnpublishedEntryById(/** @type {any} */ ({ ...entry }).id)).toBe(entry);
+      // An entry that has left the board, or none at all
+      expect(getUnpublishedEntryById('posts/gone')).toBeUndefined();
+      expect(getUnpublishedEntryById(undefined)).toBeUndefined();
     });
   });
 
@@ -811,5 +866,80 @@ describe('Test isPublishAllowed()', () => {
     } finally {
       forkedRepository.current = undefined;
     }
+  });
+
+  test('allows publishing from the last configured stage', () => {
+    const noReview = {
+      ...collection,
+      publish_mode: { type: 'editorial_workflow', stages: ['draft', 'pending_publish'] },
+    };
+
+    expect(
+      isPublishAllowed(createWorkflowEntry('draft'), { ...collection, publish_mode: 'preview' }),
+    ).toBe(true);
+    expect(isPublishAllowed(createWorkflowEntry('draft'), noReview)).toBe(false);
+    // A pull request labelled In Review counts as a draft when the stage is left out
+    expect(isPublishAllowed(createWorkflowEntry('pending_review'), noReview)).toBe(false);
+    expect(isPublishAllowed(createWorkflowEntry('pending_publish'), noReview)).toBe(true);
+
+    // Direct publishing skips the review altogether
+    expect(
+      isPublishAllowed(createWorkflowEntry('draft'), {
+        ...collection,
+        publish_mode: { type: 'editorial_workflow', direct_publish: true },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('Test isDirectPublishAllowed()', () => {
+  const collection = /** @type {any} */ ({
+    name: 'posts',
+    publish_mode: { type: 'editorial_workflow', direct_publish: true },
+  });
+
+  const entry = /** @type {any} */ ({ workflow: { pullRequest: { branch: 'cms/posts/hello' } } });
+
+  beforeEach(() => {
+    lockedBranch.current = undefined;
+    mergeLockedBranch.current = undefined;
+    forkedRepository.current = undefined;
+  });
+
+  test('allows it when the option is enabled', () => {
+    expect(isDirectPublishAllowed(collection, undefined)).toBe(true);
+    expect(isDirectPublishAllowed(collection, entry)).toBe(true);
+  });
+
+  test('refuses it without the option or a collection', () => {
+    expect(isDirectPublishAllowed(undefined, undefined)).toBe(false);
+    expect(isDirectPublishAllowed(/** @type {any} */ ({ name: 'posts' }), undefined)).toBe(false);
+    expect(
+      isDirectPublishAllowed(
+        /** @type {any} */ ({ name: 'posts', publish_mode: { direct_publish: true } }),
+        undefined,
+      ),
+    ).toBe(false);
+  });
+
+  test('refuses it when publishing is disabled for the collection', () => {
+    expect(isDirectPublishAllowed({ ...collection, publish: false }, undefined)).toBe(false);
+  });
+
+  test('refuses it to an Open Authoring contributor', () => {
+    forkedRepository.current = { owner: 'me', repo: 'site' };
+    expect(isDirectPublishAllowed(collection, undefined)).toBe(false);
+    forkedRepository.current = undefined;
+  });
+
+  test('refuses it to a user who can’t push to the branch, or merge the pull request', () => {
+    lockedBranch.current = 'main';
+    expect(isDirectPublishAllowed(collection, undefined)).toBe(false);
+    expect(isDirectPublishAllowed(collection, entry)).toBe(true);
+
+    lockedBranch.current = undefined;
+    mergeLockedBranch.current = 'main';
+    expect(isDirectPublishAllowed(collection, undefined)).toBe(true);
+    expect(isDirectPublishAllowed(collection, entry)).toBe(false);
   });
 });

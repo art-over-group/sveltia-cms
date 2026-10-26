@@ -1091,7 +1091,7 @@ edit_slug_error:
   invalid: Слъгът не може да съдържа специални знаци, включително наклонени черти и интервали.
   duplicate: Този слъг се използва от друг запис.
 
-# Entry path editing in a nested collection
+# Entry path editing for nested entries
 # Heading for the parent folder picker shown when the `meta.path` option is enabled
 entry_parent_folder: Родителска папка
 new_parent_folder: Нова папка
@@ -1565,7 +1565,7 @@ config:
     oauth_implicit_flow: Конфигурираният метод за удостоверяване (implicit flow) не се поддържа в Sveltia CMS. Използвайте друг <a>метод за удостоверяване</a>.
     github_pkce_unsupported: PKCE оторизацията все още не се поддържа поради ограничения на GitHub. Използвайте друг <a>метод за удостоверяване</a>.
     oauth_no_app_id: Идентификаторът на OAuth приложението не е дефиниран.
-    # Don’t localize `open_authoring` and `editorial_workflow`
+    # Don’t localize `open_authoring`, `editorial_workflow` and `preview`
     open_authoring_no_workflow: Опцията `open_authoring` изисква режим на публикуване `editorial_workflow`. Вижте <a>документацията</a> за подробности.
     # Don’t localize `auth_methods`
     no_auth_methods: Опцията `auth_methods` трябва да съдържа поне един метод.
@@ -1979,26 +1979,8 @@ prefs:
       description: Показване на подчертаване на връзките в прегледа на записа и в етикетите на потребителския интерфейс.
       switch_label: Винаги подчертавай връзките
 
-  # Advanced panel
-  advanced:
-    title: Разширени
-    beta:
-      title: Бета функции
-      description: Включване на някои бета функции, които може да са нестабилни или непреведени.
-      switch_label: Присъединяване към бета програмата
-    deploy_hook:
-      title: Кука за внедряване
-      description: Въведете URL адрес на уебкука, който да бъде извикан, когато ръчно стартирате внедряване чрез „Публикуване на промените“. Може да го оставите празен, ако използвате GitHub Actions.
-      # Hook URL input
-      url:
-        field_label: URL адрес на куката
-        saved: URL адресът на куката е запазен.
-        removed: URL адресът на куката е премахнат.
-      # Authorization header input
-      auth:
-        field_label: Заглавка Authorization (например Bearer <token>) (незадължително)
-        saved: Заглавката Authorization е запазена.
-        removed: Заглавката Authorization е премахната.
+  # Data Management panel
+  data:
     clear_data:
       title: Изчистване на данните
       # Clear File Cache button
@@ -2018,6 +2000,19 @@ prefs:
       title: Режим за разработчици
       description: Включване на някои функции за разработчици, включително подробни записи в конзолата и системни контекстни менюта.
       switch_label: Включване на режима за разработчици
+    deploy_hook:
+      title: Кука за внедряване
+      description: Въведете URL адрес на уебкука, който да бъде извикан, когато ръчно стартирате внедряване чрез „Публикуване на промените“. Може да го оставите празен, ако използвате GitHub Actions.
+      # Hook URL input
+      url:
+        field_label: URL адрес на куката
+        saved: URL адресът на куката е запазен.
+        removed: URL адресът на куката е премахнат.
+      # Authorization header input
+      auth:
+        field_label: Заглавка Authorization (например Bearer <token>) (незадължително)
+        saved: Заглавката Authorization е запазена.
+        removed: Заглавката Authorization е премахната.
 
 # ==============================================================================
 # Keyboard Shortcuts

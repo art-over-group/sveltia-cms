@@ -26,13 +26,15 @@ import { checkPublishAllowed } from '$lib/services/backends/git/shared/fork';
 import {
   assertBranchAtHead,
   commitToNewWorkflowBranch,
-  getMovedHeadMergeState,
   getParentDirs,
   isPullRequestMerged,
   isSquashMergeEnabled,
+  resolveMergeState,
   saveWorkflowBranch,
   toChangedFilesWithModes,
+  updateLabelledStatus,
 } from '$lib/services/backends/git/shared/workflow';
+import { user } from '$lib/services/user/account.svelte';
 import { encodePathSegments } from '$lib/services/utils/url';
 import { getAllStatusLabels } from '$lib/services/workflow/labels';
 import { openAuthoring } from '$lib/services/workflow/open-authoring';
@@ -233,22 +235,46 @@ export const savePullRequest = async (args) =>
  * @param {WorkflowStatus} status New status.
  * @returns {Promise<WorkflowPullRequest>} Updated pull request.
  */
-export const updateStatus = async (pullRequest, status) => {
-  if (openAuthoring.current) {
-    return updateForkStatus(pullRequest, status);
-  }
+export const updateStatus = (pullRequest, status) =>
+  updateLabelledStatus(pullRequest, status, { updateForkStatus, updateLabels, updateDraftState });
 
-  const isDraft = status === 'draft';
+/**
+ * Approve the pull request on behalf of the signed-in user, pinned to the head commit the entry was
+ * reviewed at.
+ * @param {WorkflowPullRequest} pullRequest Pull request.
+ * @see https://docs.gitea.com/api/next/#tag/repository/operation/repoCreatePullReview
+ */
+export const approve = async (pullRequest) => {
+  const { owner, repo } = repository;
 
-  await updateLabels(pullRequest, status);
+  await fetchAPI(`/repos/${owner}/${repo}/pulls/${pullRequest.number}/reviews`, {
+    method: 'POST',
+    body: { event: 'APPROVED', commit_id: pullRequest.headSHA },
+  });
+};
 
-  // Only the transitions into and out of the `draft` status change the title, so moving between the
-  // review and ready stages needs no further request
-  if (isDraft !== (pullRequest.status === 'draft')) {
-    await updateDraftState(pullRequest, isDraft);
-  }
+/**
+ * Withdraw the signed-in user’s approval of the pull request by deleting their approving reviews,
+ * which a reviewer may do with their own, while dismissing one takes a repository administrator.
+ * @param {WorkflowPullRequest} pullRequest Pull request.
+ * @see https://docs.gitea.com/api/next/#tag/repository/operation/repoListPullReviews
+ * @see https://docs.gitea.com/api/next/#tag/repository/operation/repoDeletePullReview
+ */
+export const withdrawApproval = async (pullRequest) => {
+  const { owner, repo } = repository;
+  const path = `/repos/${owner}/${repo}/pulls/${pullRequest.number}/reviews`;
+  const reviews = /** @type {Record<string, any>[]} */ (await fetchAllPages(path));
 
-  return { ...pullRequest, status, updatedDate: new Date() };
+  // A deletion comes back as `204 No Content`, which can’t be parsed as JSON, so the response is
+  // read as text, while a refusal still throws for the caller to report
+  await Promise.all(
+    reviews
+      .filter(
+        ({ state, dismissed, user: reviewer }) =>
+          state === 'APPROVED' && !dismissed && reviewer?.login === user.account?.login,
+      )
+      .map(({ id }) => fetchAPI(`${path}/${id}`, { method: 'DELETE', responseType: 'text' })),
+  );
 };
 
 /**
@@ -334,28 +360,29 @@ export const fetchMergeState = async (pullRequest) => {
   const onConfiguredBranches =
     item.base?.ref === repository.branch && isSameRepositoryPullRequest(item);
 
-  if (!headSHA || !onConfiguredBranches) {
-    return { headSHA, onConfiguredBranches: false, files: [], complete: false };
-  }
-
-  const movedHeadState = getMovedHeadMergeState(pullRequest, headSHA);
-
-  if (movedHeadState) {
-    return movedHeadState;
-  }
-
-  const { files, complete } = await fetchChangedFiles(number, headSHA);
-
-  return {
+  return resolveMergeState({
+    pullRequest,
     headSHA,
     onConfiguredBranches,
-    files: await toChangedFilesWithModes(files, {
-      statusMap: REST_FILE_STATUSES,
-      headSHA,
-      fetchFileModes,
-    }),
-    complete,
-  };
+    /**
+     * List the files the pull request changes at the head commit.
+     * @param {string} sha Head commit.
+     * @returns {Promise<{ files: WorkflowChangedFile[], complete: boolean }>} Files, and whether
+     * the list is complete.
+     */
+    listChangedFiles: async (sha) => {
+      const { files, complete } = await fetchChangedFiles(number, sha);
+
+      return {
+        files: await toChangedFilesWithModes(files, {
+          statusMap: REST_FILE_STATUSES,
+          headSHA: sha,
+          fetchFileModes,
+        }),
+        complete,
+      };
+    },
+  });
 };
 
 /**
@@ -480,6 +507,8 @@ export default {
   fetchPullRequests,
   savePullRequest,
   updateStatus,
+  approve,
+  withdrawApproval,
   fetchBranchHead,
   fetchMergeState,
   fetchUnchangedPaths,

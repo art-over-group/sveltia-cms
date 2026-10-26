@@ -67,7 +67,9 @@ describe('ReorderControls', () => {
   test('can be disabled altogether', async () => {
     env.hasMouse = true;
     await render(ReorderControls, { index: 1, itemCount: 3, disabled: true });
-    await expect.element(page.getByRole('button')).toHaveAttribute('aria-disabled', 'true');
+    await expect
+      .element(page.getByRole('button', { name: 'Reorder Item' }))
+      .toHaveAttribute('aria-disabled', 'true');
   });
 
   test('releases the item once when the press is cancelled', async () => {
@@ -160,6 +162,108 @@ describe('ReorderControls', () => {
       .toHaveAttribute('aria-disabled', 'true');
     await expect
       .element(page.getByRole('button', { name: 'Move Down' }))
+      .toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('renders only the drag handle, and only with a mouse, for the `handle` part', async () => {
+    env.hasMouse = true;
+
+    await render(ReorderControls, { index: 1, itemCount: 3, part: 'handle' });
+
+    await expect.element(page.getByRole('button', { name: 'Reorder Item' })).toBeVisible();
+    expect(page.getByRole('button', { name: 'Move Up' }).elements()).toHaveLength(0);
+
+    env.hasMouse = false;
+
+    await expect.poll(() => page.getByRole('button').elements()).toHaveLength(0);
+  });
+
+  test('renders the up/down buttons on any device for the `buttons` part', async () => {
+    env.hasMouse = true;
+
+    const onMove = vi.fn();
+
+    await render(ReorderControls, { index: 1, itemCount: 3, part: 'buttons', onMove });
+
+    expect(page.getByRole('button', { name: 'Reorder Item' }).elements()).toHaveLength(0);
+    await page.getByRole('button', { name: 'Move Up' }).click();
+    expect(onMove).toHaveBeenCalledWith(0, 'move-up');
+
+    env.hasMouse = false;
+
+    await page.getByRole('button', { name: 'Move Down' }).click();
+    expect(onMove).toHaveBeenCalledWith(2, 'move-down');
+  });
+});
+
+describe('ReorderControls menu', () => {
+  test('offers Move to Top, Bottom and… from three items', async () => {
+    env.hasMouse = true;
+
+    const onMove = vi.fn();
+
+    await render(ReorderControls, { index: 1, itemCount: 3, onMove });
+    await page.getByRole('button', { name: 'Reorder Options' }).click();
+    await page.getByRole('menuitem', { name: 'Move to Top' }).click();
+    expect(onMove).toHaveBeenLastCalledWith(0, 'move-options');
+    await page.getByRole('button', { name: 'Reorder Options' }).click();
+    await page.getByRole('menuitem', { name: 'Move to Bottom' }).click();
+    expect(onMove).toHaveBeenLastCalledWith(2, 'move-options');
+    await page.getByRole('button', { name: 'Reorder Options' }).click();
+    await expect.element(page.getByRole('menuitem', { name: 'Move to…' })).toBeInTheDocument();
+  });
+
+  test('has no menu for a short list or beside a lone handle', async () => {
+    env.hasMouse = true;
+
+    await render(ReorderControls, { index: 0, itemCount: 2 });
+    await expect
+      .element(page.getByRole('button', { name: 'Reorder Options' }))
+      .not.toBeInTheDocument();
+
+    await render(ReorderControls, { index: 0, itemCount: 30, part: 'handle' });
+    await expect
+      .element(page.getByRole('button', { name: 'Reorder Options' }))
+      .not.toBeInTheDocument();
+  });
+
+  test('moves to a typed position in a list', async () => {
+    env.hasMouse = true;
+
+    const onMove = vi.fn();
+
+    await render(ReorderControls, { index: 86, itemCount: 100, onMove });
+    await page.getByRole('button', { name: 'Reorder Options' }).click();
+    await page.getByRole('menuitem', { name: 'Move to…' }).click();
+
+    const input = page.getByRole('spinbutton', { name: 'Position' });
+    const ok = page.getByRole('button', { name: 'OK' });
+
+    await expect.element(input).toHaveValue('87');
+    await input.fill('101');
+    await expect.element(ok).toHaveAttribute('aria-disabled', 'true');
+    await input.fill('12');
+    await ok.click();
+    await vi.waitFor(() => expect(onMove).toHaveBeenCalledWith(11, 'move-options'));
+  });
+
+  test('disables Move to Top and Bottom at the ends of the list', async () => {
+    env.hasMouse = true;
+
+    await render(ReorderControls, { index: 0, itemCount: 3 });
+    await page.getByRole('button', { name: 'Reorder Options' }).click();
+    await expect
+      .element(page.getByRole('menuitem', { name: 'Move to Top' }))
+      .toHaveAttribute('aria-disabled', 'true');
+    await expect
+      .element(page.getByRole('menuitem', { name: 'Move to Bottom' }))
+      .not.toHaveAttribute('aria-disabled', 'true');
+    await userEvent.keyboard('{Escape}');
+
+    await render(ReorderControls, { index: 2, itemCount: 3 });
+    await page.getByRole('button', { name: 'Reorder Options' }).last().click();
+    await expect
+      .element(page.getByRole('menuitem', { name: 'Move to Bottom' }))
       .toHaveAttribute('aria-disabled', 'true');
   });
 });

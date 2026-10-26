@@ -6,7 +6,11 @@ import { goto, parseLocation } from '$lib/services/app/navigation';
 import { backend, backendName, selectBackend } from '$lib/services/backends';
 import { lockedBranch, mergeLockedBranch } from '$lib/services/backends/branch-access';
 import { NOT_COLLABORATOR_ERROR_MESSAGE } from '$lib/services/backends/git/shared/errors';
-import { dataGeneration, repositoryHead } from '$lib/services/backends/git/shared/head';
+import {
+  createStaleCheck,
+  dataGeneration,
+  repositoryHead,
+} from '$lib/services/backends/git/shared/head';
 import { startRemoteChangePolling, stopRemoteChangePolling } from '$lib/services/backends/poll';
 import { cmsConfig } from '$lib/services/config';
 import { dataLoaded } from '$lib/services/contents';
@@ -269,6 +273,8 @@ export const copyMagicLinkPrefs = (copiedPrefs) => {
  * @param {BackendService} _backend Backend.
  */
 const loadRepositoryData = async (_backend) => {
+  // Signing out while the data is being loaded discards it, and stops the polling started below
+  const isStale = createStaleCheck();
   // The pull requests don’t depend on the files, so they’re requested at the same time. That needs
   // the branch they target, though: without one configured, the default branch is only known once
   // the files are being fetched, and every pull request would be dropped as targeting another
@@ -277,7 +283,18 @@ const loadRepositoryData = async (_backend) => {
   const pullRequests = branchKnown ? startLoadingPullRequests() : undefined;
 
   await _backend.fetchFiles();
+
+  // The pull requests requested early belong to the previous session as well, and are dropped
+  if (isStale()) {
+    return;
+  }
+
   await loadUnpublishedEntries(pullRequests);
+
+  if (isStale()) {
+    return;
+  }
+
   // The deploy state is a nicety, so it’s resolved in the background rather than delaying the UI.
   // The files were loaded from the branch head, which is the commit the production site is built
   // from, so it isn’t fetched again
@@ -424,7 +441,15 @@ export const signOut = async () => {
   // A check for remote changes, or a load, still on its way belongs to this session, so it mustn’t
   // put its results back into the stores once they have been reset below
   dataGeneration.current += 1;
-  await backend.current?.signOut();
+
+  // A failure, e.g. an IndexedDB error, mustn’t keep the user signed in
+  try {
+    await backend.current?.signOut();
+  } catch (/** @type {any} */ ex) {
+    // eslint-disable-next-line no-console
+    console.error(ex);
+  }
+
   await clearUserCache();
   clearIntegrationCredentials();
 

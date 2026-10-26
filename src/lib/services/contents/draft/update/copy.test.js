@@ -399,6 +399,40 @@ describe('draft/update/copy', () => {
       expect(result).not.toHaveProperty('title');
     });
 
+    it('should translate a `duplicate_if_empty` field still holding the source value', () => {
+      vi.mocked(getField).mockImplementation(({ keyPath }) =>
+        keyPath === 'title'
+          ? { name: 'title', i18n: 'duplicate_if_empty', widget: 'string' }
+          : undefined,
+      );
+
+      mockEntryDraft.currentValues.ja.title = mockEntryDraft.currentValues.en.title;
+
+      const options = { sourceLanguage: 'en', targetLanguage: 'ja', translate: true };
+
+      expect(getCopyingFieldMap({ draft: mockEntryDraft, options })).toHaveProperty('title');
+
+      // A value of the locale’s own is kept
+      mockEntryDraft.currentValues.ja.title = 'Japanese Title';
+
+      expect(getCopyingFieldMap({ draft: mockEntryDraft, options })).not.toHaveProperty('title');
+    });
+
+    it('should skip a populated List field with the `duplicate_if_empty` option', () => {
+      // A List field doesn’t support the strategy, so it works like a translatable field
+      vi.mocked(getField).mockImplementation(({ keyPath }) =>
+        keyPath === 'title'
+          ? { name: 'title', i18n: 'duplicate_if_empty', widget: 'list' }
+          : undefined,
+      );
+
+      mockEntryDraft.currentValues.ja.title = mockEntryDraft.currentValues.en.title;
+
+      const options = { sourceLanguage: 'en', targetLanguage: 'ja', translate: true };
+
+      expect(getCopyingFieldMap({ draft: mockEntryDraft, options })).not.toHaveProperty('title');
+    });
+
     it('should mark richtext fields as markdown', () => {
       const draft = mockEntryDraft;
 
@@ -973,8 +1007,8 @@ describe('draft/update/copy', () => {
       const { translator } = await import('$lib/services/integrations/translators');
       const { prefs } = await import('$lib/services/user/prefs.svelte');
 
-      // What an HTML-format translator such as Google or DeepL hands back: special characters as
-      // entities, including those it has added itself
+      // What an HTML-format translator such as Google hands back: special characters as entities,
+      // including those it has added itself
       const mockTranslate = vi
         .fn()
         .mockResolvedValue([

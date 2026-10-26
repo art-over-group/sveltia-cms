@@ -27,16 +27,21 @@
   import EntryStatusMenu from '$lib/components/workflow/entry-status-menu.svelte';
   import PublishEntryButton from '$lib/components/workflow/publish-entry-button.svelte';
   import { getEntryEditorBackPath, goBack, goto, overlayTitle } from '$lib/services/app/navigation';
+  import { saveProgress } from '$lib/services/backends/commit-progress';
   import { skipCIConfigured, skipCIEnabled } from '$lib/services/backends/git/shared/integration';
   import { isDraftReadonly } from '$lib/services/config/readonly';
   import { getCollectionLabel } from '$lib/services/contents/collection';
   import { getCollectionFileLabel } from '$lib/services/contents/collection/files';
-  import { isNestedCollection, nestedFilterPath } from '$lib/services/contents/collection/nested';
+  import { hasNestedEntries, nestedFilterPath } from '$lib/services/contents/collection/nested';
   import { collectionState } from '$lib/services/contents/collection/view';
   import { createDraft } from '$lib/services/contents/draft/create';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
   import { canResetEntry } from '$lib/services/contents/draft/update/reset';
-  import { activeInlineEditors, copyFromLocaleToast } from '$lib/services/contents/editor';
+  import {
+    activeInlineEditors,
+    copyFromLocaleToast,
+    listItemClipboardToast,
+  } from '$lib/services/contents/editor';
   import { fieldUpdatePending } from '$lib/services/contents/editor/pending';
   import { createResetMenuState } from '$lib/services/contents/editor/reset-menu.svelte';
   import { duplicateEntryDraft, saveEntryDraftFlow } from '$lib/services/contents/editor/save';
@@ -55,6 +60,7 @@
   import {
     checkPublishedVersion,
     getUnpublishedEntryByDraft,
+    isDirectPublishAllowed,
     isPendingDeletion,
     isWorkflowEnabled,
     workflowEnabled,
@@ -64,6 +70,7 @@
 
   /**
    * @import { EntryConflict } from '$lib/services/contents/draft/save/conflict';
+   * @import { WorkflowStatus } from '$lib/types/private';
    */
 
   /**
@@ -87,6 +94,11 @@
   let errorCount = $state(0);
   let showReviewDialog = $state(false);
   /**
+   * Stage the review prompt offers to move the entry just saved to.
+   * @type {WorkflowStatus | undefined}
+   */
+  let reviewStage = $state();
+  /**
    * Resolver for the review prompt, so the save can wait for the answer.
    * @type {((sendForReview: boolean) => void) | undefined}
    */
@@ -95,12 +107,14 @@
   /**
    * Someone else’s change to the entry that the last save attempt would have overwritten, along
    * with the options of that attempt, so the save can be repeated as asked once the user agrees.
-   * @type {{ conflict: EntryConflict, skipCI: boolean | undefined } | undefined}
+   * @type {{ conflict: EntryConflict, skipCI: boolean | undefined, publish: boolean } | undefined}
    */
   let saveConflict = $state();
   let showErrorDialog = $state(false);
   let errorMessage = $state('');
   let saving = $state(false);
+  /** Whether the entry being saved is also being published, bypassing the review. */
+  let publishing = $state(false);
   let deleting = $state(false);
   /** Whether the entry is being duplicated, which takes a moment when it has assets to copy. */
   let duplicating = $state(false);
@@ -197,6 +211,14 @@
       creationDisabled: collectionState.current.creationDisabled,
     }),
   );
+  // A workflow draft can also be saved and published in one go, if the publish mode allows it
+  const directPublish = $derived(
+    useWorkflow && isDirectPublishAllowed(collection, unpublishedEntry),
+  );
+  // The review prompt hands the entry over for review, or marks it ready when there’s no review
+  const reviewDialogLabel = $derived(
+    _(reviewStage === 'pending_publish' ? 'workflow.mark_as_ready' : 'workflow.send_for_review'),
+  );
   // The menu item either throws the pull request away or deletes the entry outright, depending on
   // whether it has been published
   const discardItemStrings = $derived(
@@ -213,7 +235,7 @@
    * path given by `getEntryEditorBackPath()` otherwise.
    */
   const _goBack = () => {
-    const dirPath = collection && isNestedCollection(collection) ? nestedFilterPath.current : '';
+    const dirPath = collection && hasNestedEntries(collection) ? nestedFilterPath.current : '';
 
     goBack(getEntryEditorBackPath({ collectionName, dirPath }), {
       returnTo: isSearchResultsPath,
@@ -221,11 +243,14 @@
   };
 
   /**
-   * Ask whether the entry just saved should be handed over for review, and wait for the answer.
-   * @returns {Promise<boolean>} `true` if the user wants to send it.
+   * Ask whether the entry just saved should be moved to the given stage, e.g. handed over for
+   * review, and wait for the answer.
+   * @param {WorkflowStatus} stage Next stage.
+   * @returns {Promise<boolean>} `true` if the user wants to move it.
    */
-  const askForReview = () =>
+  const askForReview = (stage) =>
     new Promise((resolve) => {
+      reviewStage = stage;
       resolveReviewPrompt = resolve;
       showReviewDialog = true;
     });
@@ -249,8 +274,10 @@
    * @param {boolean} [options.skipCI] Whether to disable automatic deployments for the change.
    * @param {boolean} [options.overwrite] Whether to save over someone else’s change to the entry,
    * once the user has been asked.
+   * @param {boolean} [options.publish] Whether to publish the entry along with the save, bypassing
+   * the review.
    */
-  const save = async ({ skipCI = undefined, overwrite = false } = {}) => {
+  const save = async ({ skipCI = undefined, overwrite = false, publish = false } = {}) => {
     const draft = entryDraft.current;
 
     if (!collection || !draft) {
@@ -258,6 +285,7 @@
     }
 
     saving = true;
+    publishing = publish;
 
     try {
       const outcome = await saveEntryDraftFlow({
@@ -265,6 +293,7 @@
         useWorkflow: isWorkflowUsed,
         skipCI,
         overwrite,
+        publish,
         askForReview,
         closeOnSave: isCloseOnSaveEnabled,
       });
@@ -297,7 +326,7 @@
         showValidationToast = true;
       } else if (outcome.type === 'conflict') {
         // Someone else has changed the entry since it was opened; let the user decide
-        saveConflict = { conflict: outcome.conflict, skipCI };
+        saveConflict = { conflict: outcome.conflict, skipCI, publish };
         showConflictDialog = true;
       } else if (outcome.type === 'error') {
         showErrorDialog = true;
@@ -305,6 +334,7 @@
       }
     } finally {
       saving = false;
+      publishing = false;
     }
   };
 </script>
@@ -352,6 +382,14 @@
   {#if unpublishedEntry && !locked}
     <EntryStatusMenu entry={unpublishedEntry} disabled={controlsDisabled} />
   {/if}
+  <!-- Announced politely as the count changes, for a save that takes a while -->
+  <span class="save-progress" aria-live="polite">
+    {#if saving && saveProgress.current}
+      {_(`save_progress.${saveProgress.current.phase}`, {
+        values: { done: saveProgress.current.done, total: saveProgress.current.total },
+      })}
+    {/if}
+  </span>
   {#if locked}
     <!-- Nothing to save: the entry is read-only, or shown for reference until the deletion is
     carried out -->
@@ -374,6 +412,29 @@
             label={_(skipCIEnabled.current ? 'save_and_publish' : 'save_without_publishing')}
             onclick={() => {
               save({ skipCI: !skipCIEnabled.current });
+            }}
+          />
+        </Menu>
+      {/snippet}
+    </SplitButton>
+  {:else if directPublish}
+    <!-- Saving keeps the entry as a draft for review, while the popup item publishes it now -->
+    <SplitButton
+      variant="primary"
+      label={_(saving ? (publishing ? 'publishing' : 'saving') : 'save')}
+      disabled={controlsDisabled || !modified}
+      keyShortcuts="Accel+S"
+      onclick={() => {
+        save();
+      }}
+    >
+      {#snippet popup()}
+        <Menu>
+          <MenuItem
+            label={_('save_and_publish')}
+            onclick={() => {
+              // A change published directly has to be deployed, whatever the `skip_ci` option says
+              save({ publish: true, skipCI: false });
             }}
           />
         </Menu>
@@ -530,6 +591,12 @@
   </Alert>
 </Toast>
 
+<Toast id={listItemClipboardToast.current.id} bind:show={listItemClipboardToast.current.show}>
+  <Alert status={listItemClipboardToast.current.status}>
+    {listItemClipboardToast.current.message}
+  </Alert>
+</Toast>
+
 <ResetDialog
   bind:open={resetMenu.dialogOpen}
   action={resetMenu.action}
@@ -540,8 +607,8 @@
 
 <ConfirmationDialog
   bind:open={showReviewDialog}
-  title={_('workflow.send_for_review')}
-  okLabel={_('workflow.send_for_review')}
+  title={reviewDialogLabel}
+  okLabel={reviewDialogLabel}
   cancelLabel={_('later')}
   onOk={() => {
     resolveReviewPrompt?.(true);
@@ -552,7 +619,11 @@
     resolveReviewPrompt?.(false);
   }}
 >
-  {_('workflow.confirm_sending_for_review')}
+  {_(
+    reviewStage === 'pending_publish'
+      ? 'workflow.confirm_marking_as_ready'
+      : 'workflow.confirm_sending_for_review',
+  )}
 </ConfirmationDialog>
 
 <EntryRemoval
@@ -578,7 +649,7 @@
   bind:open={showConflictDialog}
   conflict={saveConflict?.conflict}
   onOverwrite={async () => {
-    await save({ skipCI: saveConflict?.skipCI, overwrite: true });
+    await save({ skipCI: saveConflict?.skipCI, overwrite: true, publish: saveConflict?.publish });
   }}
   onClose={() => {
     menuButton?.focus();
@@ -602,6 +673,15 @@
 </AlertDialog>
 
 <style>
+  .save-progress {
+    color: var(--sui-secondary-foreground-color);
+    font-size: var(--sui-font-size-small);
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .error {
     margin-top: 8px;
     border-radius: var(--sui-control-medium-border-radius);

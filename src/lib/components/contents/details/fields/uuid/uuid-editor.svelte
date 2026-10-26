@@ -6,16 +6,20 @@
 -->
 <script>
   import { TextInput } from '@sveltia/ui';
-  import { getContext, onMount } from 'svelte';
+  import { onMount } from 'svelte';
 
   import { warnDeprecation } from '$lib/services/config/deprecations';
   import { getEntryDraftContext } from '$lib/services/contents/draft/state.svelte';
+  import {
+    getFieldEditorContext,
+    isInEditorComponent,
+  } from '$lib/services/contents/editor/field-context';
   import { getInitialValue } from '$lib/services/contents/fields/uuid/helpers';
   import { isFieldTranslatable } from '$lib/services/contents/i18n/fields';
   import { watch } from '$lib/services/utils/state.svelte';
 
   /**
-   * @import { FieldEditorContext, FieldEditorProps } from '$lib/types/private';
+   * @import { FieldEditorProps } from '$lib/types/private';
    * @import { UuidField } from '$lib/types/public';
    */
 
@@ -27,11 +31,10 @@
 
   const entryDraft = getEntryDraftContext();
 
-  /** @type {FieldEditorContext} */
-  const { valueStoreKey = 'currentValues' } = getContext('field-editor') ?? {};
+  const { valueStoreKey = 'currentValues' } = getFieldEditorContext();
   // A rich text editor component’s values live in the document of the locale they’re edited in,
   // so its UUID is filled in whatever the locale
-  const inEditorComponent = valueStoreKey === 'extraValues';
+  const inEditorComponent = isInEditorComponent(valueStoreKey);
 
   /** @type {FieldEditorProps & Props} */
   let {
@@ -76,7 +79,7 @@
   dir="ltr"
   bind:value={currentValue}
   flex
-  readonly={readonly && fieldConfig.read_only !== false}
+  {readonly}
   {required}
   {invalid}
   aria-labelledby="{fieldId}-label"

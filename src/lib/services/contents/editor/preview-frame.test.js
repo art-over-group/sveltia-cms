@@ -1,6 +1,29 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { buildPreviewFrameHTML } from '$lib/services/contents/editor/preview-frame';
+import { customPreviewTemplateRegistry } from '$lib/services/api/registries';
+import {
+  buildPreviewFrameHTML,
+  getPreviewTemplate,
+} from '$lib/services/contents/editor/preview-frame';
+
+afterEach(() => {
+  customPreviewTemplateRegistry.clear();
+});
+
+describe('getPreviewTemplate()', () => {
+  test('returns the template registered for the collection or file', () => {
+    const postTemplate = vi.fn();
+    const aboutTemplate = vi.fn();
+
+    customPreviewTemplateRegistry.set('posts', postTemplate);
+    customPreviewTemplateRegistry.set('about', aboutTemplate);
+
+    expect(getPreviewTemplate({ collectionName: 'posts' })).toBe(postTemplate);
+    expect(getPreviewTemplate({ collectionName: 'pages', fileName: 'about' })).toBe(aboutTemplate);
+    expect(getPreviewTemplate({ collectionName: 'pages', fileName: 'contact' })).toBeUndefined();
+    expect(getPreviewTemplate({ collectionName: 'pages' })).toBeUndefined();
+  });
+});
 
 describe('buildPreviewFrameHTML()', () => {
   test('sets the language, direction, base URL and stylesheets', () => {

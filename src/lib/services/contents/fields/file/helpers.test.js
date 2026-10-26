@@ -5,6 +5,7 @@ import { createMockAssetFolder } from '$lib/test/factories';
 import {
   getAssetLibraryFolderMap,
   getDefaultAssetFolder,
+  getFieldAssetFolder,
   getFileDisplayPath,
   getTargetFolderPath,
   getUnsavedFileDisplayPath,
@@ -743,6 +744,29 @@ describe('contents/fields/file/helpers', () => {
     });
   });
 
+  describe('getFieldAssetFolder', () => {
+    it('should return the default folder of the library folder map for the field', () => {
+      const fieldFolder = createMockAssetFolder({
+        collectionName: 'posts',
+        internalPath: 'content/posts/images/banner',
+        publicPath: '/images/banner',
+      });
+
+      vi.mocked(getAssetFolder).mockImplementation((args) =>
+        'typedKeyPath' in args && 'isIndexFile' in args ? fieldFolder : undefined,
+      );
+
+      const result = getFieldAssetFolder({
+        collectionName: 'posts',
+        fileName: undefined,
+        typedKeyPath: 'banner',
+        isIndexFile: false,
+      });
+
+      expect(result).toBe(fieldFolder);
+    });
+  });
+
   describe('getTargetFolderPath', () => {
     describe('when folder is undefined', () => {
       it('should return undefined', () => {
@@ -1156,6 +1180,7 @@ describe('contents/fields/file/helpers', () => {
 
     it('should return an empty string for an empty value', () => {
       expect(getFileDisplayPath({ draft, value: '' })).toBe('');
+      expect(getFileDisplayPath({ draft, value: /** @type {any} */ (123) })).toBe('');
     });
 
     it('should return the path an unsaved file will be stored at, with the name decoded', () => {

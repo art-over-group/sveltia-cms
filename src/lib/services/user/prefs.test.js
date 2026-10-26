@@ -108,12 +108,33 @@ describe('prefs service', () => {
     expect(prefs.closeOnSave).toBe(true);
     expect(prefs.closeWithEscape).toBe(true);
     expect(prefs.underlineLinks).toBe(true);
-    expect(prefs.beta).toBe(false);
     expect(prefs.devModeEnabled).toBe(false);
     expect(prefs.localGitCommits).toBe(false);
     expect(prefs.defaultTranslationService).toBe('google');
     expect(prefs.apiKeys).toEqual({});
     expect(prefs.locale).toBe('auto');
+  });
+
+  it('should apply default values when the stored value isn’t an object', async () => {
+    mockLocalStorage.get.mockResolvedValue('corrupt');
+
+    const { prefs, prefsError } = await import('./prefs.svelte.js');
+
+    await wait();
+
+    expect(prefsError.current).toBeUndefined();
+    expect(prefs.apiKeys).toEqual({});
+    expect(prefs.locale).toBe('auto');
+  });
+
+  it('should drop the legacy beta value', async () => {
+    mockLocalStorage.get.mockResolvedValue({ beta: true });
+
+    const { prefs } = await import('./prefs.svelte.js');
+
+    await wait();
+
+    expect(prefs).not.toHaveProperty('beta');
   });
 
   it('should set app locale when valid locale is loaded', async () => {
@@ -150,7 +171,7 @@ describe('prefs service', () => {
     mockWaitLocale.mockClear();
     mockAppLocale.set.mockClear();
 
-    prefs.beta = true;
+    prefs.devModeEnabled = true;
 
     await wait();
 
@@ -358,9 +379,9 @@ describe('prefs service', () => {
 
     await wait();
     mockLocalStorage.set.mockClear();
-    mockLocalStorage.get.mockResolvedValue({ beta: false });
+    mockLocalStorage.get.mockResolvedValue({ devModeEnabled: false });
 
-    prefs.beta = true;
+    prefs.devModeEnabled = true;
 
     await wait();
 
@@ -375,7 +396,7 @@ describe('prefs service', () => {
 
     await wait();
 
-    prefs.beta = true;
+    prefs.devModeEnabled = true;
 
     // Should not throw
     await expect(wait()).resolves.toBeUndefined();

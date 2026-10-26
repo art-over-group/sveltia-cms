@@ -16,11 +16,18 @@ import {
 } from '$lib/services/contents/entry/fields';
 import { getWildcardKeyPathPattern } from '$lib/services/contents/entry/key-paths';
 import { parseDateTimeConfig } from '$lib/services/contents/fields/date-time/config';
+import { convertMapLists, getMapKeyField } from '$lib/services/contents/fields/list/map';
 import { resolveFileConfig } from '$lib/services/contents/file/config';
 import { TOML_FORMATS } from '$lib/services/contents/file/constants';
 import { isFieldLocalized } from '$lib/services/contents/i18n/fields';
 import { getOrCreate } from '$lib/services/utils/cache';
-import { hasIndexLikeChildKey, isValueEmpty, unflattenKeys } from '$lib/services/utils/object';
+import { isNumeric } from '$lib/services/utils/number';
+import {
+  hasIndexLikeChildKey,
+  isPlainObject,
+  isValueEmpty,
+  unflattenKeys,
+} from '$lib/services/utils/object';
 
 /**
  * @import {
@@ -179,7 +186,7 @@ const isFieldInLocale = ({ locale, defaultLocale, getFieldArgs }, keyPath) => {
 
   // Skip the list item indexes, which aren’t fields of their own, e.g. `items.0` in `items.0.kv`
   return segments.every((segment, index) => {
-    if (index < segments.length - 1 && /^\d+$/.test(segment)) {
+    if (index < segments.length - 1 && isNumeric(segment)) {
       return true;
     }
 
@@ -435,6 +442,31 @@ const finalizeContent = ({
 };
 
 /**
+ * Remove `null` and `undefined` from the given value for TOML output, as TOML has no null. An item
+ * of a list, e.g. an empty optional Number field in a simple list, is dropped, as smol-toml throws
+ * on it. An object property is dropped too: smol-toml skips it in a table but writes an invalid
+ * inline table, e.g. for an object in a nested list.
+ * @param {any} value Value.
+ * @returns {any} Value without `null` and `undefined`. Arrays and plain objects are copied.
+ */
+const removeTomlNulls = (value) => {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item !== null && item !== undefined).map(removeTomlNulls);
+  }
+
+  // Leave class instances, such as a `TomlDate`, as they are
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, val]) => val !== null && val !== undefined)
+        .map(([key, val]) => [key, removeTomlNulls(val)]),
+    );
+  }
+
+  return value;
+};
+
+/**
  * Serialize the content for the output.
  * @param {object} args Arguments.
  * @param {EntryDraft} args.draft Entry draft.
@@ -459,7 +491,7 @@ export const serializeContent = ({ draft, locale, valueMap, format }) => {
     format ?? resolveFileConfig({ collection, collectionFile, isIndexFile }).format,
   );
 
-  const content = finalizeContent({
+  const finalizedContent = finalizeContent({
     collectionName,
     fileName: collectionFile?.name,
     fields,
@@ -473,10 +505,18 @@ export const serializeContent = ({ draft, locale, valueMap, format }) => {
     isTomlOutput,
   });
 
+  // Store the List fields with the `map_key_field` option as maps
+  const mappedContent = convertMapLists(finalizedContent, fields, false);
+  const content = isTomlOutput ? removeTomlNulls(mappedContent) : mappedContent;
+
   // Handle a special case: top-level List field. TOML doesn’t support top-level arrays, so we
-  // ignore the `root` option for such cases.
-  if (!isTomlOutput && hasRootField(fields, 'list')) {
-    return content[fields[0].name] ?? [];
+  // ignore the `root` option for such cases, unless the list is stored as a map
+  if (hasRootField(fields, 'list')) {
+    const isMap = !!getMapKeyField(fields[0]);
+
+    if (isMap || !isTomlOutput) {
+      return content[fields[0].name] ?? (isMap ? {} : []);
+    }
   }
 
   // Handle a special case: top-level KeyValue field

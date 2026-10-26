@@ -3,7 +3,7 @@
   import { Alert, ConfirmationDialog, Toast } from '@sveltia/ui';
 
   import CascadeDeleteNote from '$lib/components/common/cascade-delete-note.svelte';
-  import { isCommitCancelled } from '$lib/services/backends/commit-prompt';
+  import { runCommit } from '$lib/services/backends/commit-prompt';
   import { getErrorMessage } from '$lib/services/backends/git/shared/errors';
   import { selectedCollection } from '$lib/services/contents/collection';
   import {
@@ -12,7 +12,7 @@
   } from '$lib/services/contents/collection/data';
   import { selectedEntries } from '$lib/services/contents/collection/entries';
   import { listedEntries, listedUnpublishedEntries } from '$lib/services/contents/collection/view';
-  import { getEntryRelativeAssets } from '$lib/services/contents/entry/assets';
+  import { getEntriesRelativeAssets } from '$lib/services/contents/entry/assets';
   import {
     EMPTY_CASCADE_DELETE_PLAN,
     planCascadeDelete,
@@ -60,12 +60,15 @@
   // Assets committed alongside an unpublished entry don’t exist on the configured branch yet, so
   // only look at the published entries here
   const publishedEntryAssets = $derived.by(() => {
-    const collectionName = selectedCollection.current?.name;
+    // Looked up for all the entries at once, as finding the assets other entries use as well takes
+    // a pass over the collection. Entries are only selected within a collection, and without one
+    // the helper finds no assets anyway
+    const assetLists = getEntriesRelativeAssets({
+      entries: publishedEntries,
+      collectionName: /** @type {string} */ (selectedCollection.current?.name),
+    });
 
-    return publishedEntries.map((entry) => ({
-      entry,
-      assets: collectionName ? getEntryRelativeAssets({ entry, collectionName }) : [],
-    }));
+    return publishedEntries.map((entry, index) => ({ entry, assets: assetLists[index] }));
   });
   const associatedAssets = $derived(publishedEntryAssets.flatMap(({ assets }) => assets));
 
@@ -74,29 +77,29 @@
    * for it.
    */
   const deleteSelectedEntries = async () => {
-    try {
-      const collection = selectedCollection.current;
+    const collection = selectedCollection.current;
 
-      const toastState = await deleteOrDiscardEntries({
+    const { ok, cancelled, result, error } = await runCommit(() =>
+      deleteOrDiscardEntries({
         drafts: draftEntries,
         items: publishedEntryAssets,
         collection,
         useWorkflow: isWorkflowEnabled(collection),
-      });
+      }),
+    );
 
-      if (toastState) {
-        contentUpdatesToast.current = { ...UPDATE_TOAST_DEFAULT_STATE, ...toastState };
-      }
-    } catch (/** @type {any} */ ex) {
+    if (!ok) {
       // The user has cancelled the commit at the commit message prompt, which isn’t a failure
-      if (!isCommitCancelled(ex)) {
-        errorMessage = getErrorMessage(ex, 'deleting_entry_failed');
+      if (!cancelled) {
+        errorMessage = getErrorMessage(error, 'deleting_entry_failed');
         showErrorToast = true;
-        // eslint-disable-next-line no-console
-        console.error(ex);
       }
 
       return;
+    }
+
+    if (result) {
+      contentUpdatesToast.current = { ...UPDATE_TOAST_DEFAULT_STATE, ...result };
     }
 
     // Discarding a draft doesn’t change `listedEntries`, which is what normally resets the

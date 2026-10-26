@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getEntryDirName,
+  getEntryDisplayLocale,
   getEntryFolderPath,
+  getEntryLocaleFile,
   getEntryPaths,
 } from '$lib/services/contents/entry/paths';
 import { getEntryPathRegEx } from '$lib/services/contents/file/config';
@@ -59,6 +61,34 @@ describe('getEntryPaths()', () => {
   });
 });
 
+describe('getEntryLocaleFile()', () => {
+  const en = { slug: 'hello', path: 'posts/en/hello.md', content: { title: 'Hello' } };
+  const fr = { slug: 'bonjour', path: 'posts/fr/hello.md', content: { title: 'Bonjour' } };
+  const de = { slug: 'hallo', path: 'posts/de/hello.md', content: { title: 'Hallo' } };
+  const entry = /** @type {Entry} */ (/** @type {unknown} */ ({ locales: { de, en, fr } }));
+
+  it('returns the given locale’s file', () => {
+    expect(getEntryLocaleFile(entry, { locale: 'fr', defaultLocale: 'en' })).toBe(fr);
+  });
+
+  it('falls back to the default locale’s file', () => {
+    expect(getEntryLocaleFile(entry, { locale: 'ja', defaultLocale: 'en' })).toBe(en);
+    expect(getEntryLocaleFile(entry, { defaultLocale: 'en' })).toBe(en);
+  });
+
+  it('falls back to the first file', () => {
+    expect(getEntryLocaleFile(entry, { locale: 'ja', defaultLocale: 'ko' })).toBe(de);
+    expect(getEntryLocaleFile(entry, { locale: 'ja' })).toBe(de);
+    expect(getEntryLocaleFile(entry)).toBe(de);
+  });
+
+  it('returns `undefined` for an entry without files', () => {
+    const empty = /** @type {Entry} */ (/** @type {unknown} */ ({ locales: {} }));
+
+    expect(getEntryLocaleFile(empty, { defaultLocale: 'en' })).toBeUndefined();
+  });
+});
+
 describe('getEntryFolderPath()', () => {
   it('returns the folder of the first locale’s file', () => {
     const entry = /** @type {Entry} */ (
@@ -102,7 +132,7 @@ describe('getEntryDirName()', () => {
    * @param {string} args.basePath Normalized `folder` option.
    * @param {I18nFileStructure} [args.structure] I18n structure. Omit to disable i18n.
    * @param {boolean} [args.omitDefaultLocaleFromFilePath] Whether to omit the default locale.
-   * @param {number} [args.nestedDepth] Nested collection depth.
+   * @param {number} [args.nestedDepth] Nested entry depth.
    * @param {string} [args.subPath] Normalized `path` option.
    * @returns {{ basePath: string, fullPathRegEx: RegExp }} File configuration.
    */
@@ -246,5 +276,19 @@ describe('getEntryDirName()', () => {
     expect(getEntryDirName('content/posts/foo.md')).toBe('content/posts');
     expect(getEntryDirName('content/posts/foo.md', { basePath: '' })).toBe('content/posts');
     expect(getEntryDirName('foo.md')).toBe('');
+  });
+});
+
+describe('getEntryDisplayLocale()', () => {
+  it('should return the default locale if the entry has it', () => {
+    expect(getEntryDisplayLocale({ fr: {}, en: {} }, 'en')).toBe('en');
+  });
+
+  it('should fall back to the first locale', () => {
+    expect(getEntryDisplayLocale({ fr: {}, de: {} }, 'en')).toBe('fr');
+  });
+
+  it('should return `undefined` without locales', () => {
+    expect(getEntryDisplayLocale({}, 'en')).toBeUndefined();
   });
 });

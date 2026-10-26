@@ -1,11 +1,14 @@
+import { SvelteMap } from 'svelte/reactivity';
 import { describe, expect, test } from 'vitest';
 
 import {
   customComponentRegistry,
   customFieldTypeRegistry,
   customFileFormatRegistry,
+  customPageRegistry,
   customPreviewStyleRegistry,
   customPreviewTemplateRegistry,
+  customStringTransformationRegistry,
   eventHookRegistry,
 } from '$lib/services/api/registries';
 
@@ -16,10 +19,16 @@ describe('API registries', () => {
       customFieldTypeRegistry,
       customFileFormatRegistry,
       customPreviewTemplateRegistry,
+      customStringTransformationRegistry,
     ].forEach((registry) => {
       expect(registry).toBeInstanceOf(Map);
       expect(registry.size).toBe(0);
     });
+  });
+
+  test('the custom page registry is an empty reactive map', () => {
+    expect(customPageRegistry).toBeInstanceOf(SvelteMap);
+    expect(customPageRegistry.size).toBe(0);
   });
 
   test('unkeyed registries are empty sets', () => {
@@ -34,8 +43,10 @@ describe('API registries', () => {
       customComponentRegistry,
       customFieldTypeRegistry,
       customFileFormatRegistry,
+      customPageRegistry,
       customPreviewStyleRegistry,
       customPreviewTemplateRegistry,
+      customStringTransformationRegistry,
       eventHookRegistry,
     ];
 

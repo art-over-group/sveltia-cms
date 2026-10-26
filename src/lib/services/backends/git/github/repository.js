@@ -1,12 +1,12 @@
 import { recordBranchAccess } from '$lib/services/backends/branch-access';
 import { fetchAPI, fetchGraphQL, graphqlVars } from '$lib/services/backends/git/shared/api';
 import {
-  createLocalizedError,
-  NOT_COLLABORATOR_ERROR_MESSAGE,
+  createPermissionError,
   toRepositoryAccessError,
 } from '$lib/services/backends/git/shared/errors';
 import {
   applyDefaultBranch,
+  createBaseURLsGetter,
   REPOSITORY_INFO_PLACEHOLDER,
 } from '$lib/services/backends/git/shared/repository';
 
@@ -28,10 +28,10 @@ export const repository = { ...REPOSITORY_INFO_PLACEHOLDER };
  * @returns {RepositoryBaseURLs} An object containing the tree base URL for browsing files, and the
  * blob base URL for accessing file contents.
  */
-export const getBaseURLs = (repoURL, branch) => ({
-  treeBaseURL: branch ? `${repoURL}/tree/${branch}` : repoURL,
-  blobBaseURL: branch ? `${repoURL}/blob/${branch}` : '',
-  commitBaseURL: `${repoURL}/commit`,
+export const getBaseURLs = createBaseURLsGetter({
+  tree: '/tree',
+  blob: '/blob',
+  commit: '/commit',
 });
 
 /**
@@ -75,12 +75,14 @@ export const checkRepositoryAccess = async () => {
     );
   }
 
-  const { permissions } = /** @type {{ permissions?: { push?: boolean } }} */ (
+  const { permissions } = /** @type {{ permissions?: { pull?: boolean, push?: boolean } }} */ (
     await response.json()
   );
 
   if (!permissions?.push) {
-    throw createLocalizedError(NOT_COLLABORATOR_ERROR_MESSAGE, 'repository_no_access', { repo });
+    // A read or triage collaborator can read the repository, but a response without the user’s
+    // permissions doesn’t say they can
+    throw createPermissionError(repo, permissions?.pull);
   }
 };
 

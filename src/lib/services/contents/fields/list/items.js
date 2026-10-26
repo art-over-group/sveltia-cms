@@ -4,6 +4,7 @@ import { getDefaultValues } from '$lib/services/contents/draft/defaults';
 import { getInitialExpanderState } from '$lib/services/contents/editor/fields';
 import { hasUuidTag } from '$lib/services/contents/fields/compute/helpers';
 import { tagListItems } from '$lib/services/contents/fields/list/helpers';
+import { getValueSubFields } from '$lib/services/contents/fields/list/subfields';
 import { getInitialValue as getInitialUuidValue } from '$lib/services/contents/fields/uuid/helpers';
 import { getOrCreate } from '$lib/services/utils/cache';
 import { unflattenKeys } from '$lib/services/utils/object';
@@ -21,19 +22,6 @@ import { unflattenKeys } from '$lib/services/utils/object';
  * VariableFieldType,
  * } from '$lib/types/public';
  */
-
-/**
- * Get the subfields of an Object field value or a list item, resolving the variable type against
- * the type name stored in the value.
- * @param {object} args Arguments.
- * @param {Record<string, any>} args.value Object value.
- * @param {Field[]} [args.fields] Subfields, if the field has them.
- * @param {VariableFieldType[]} [args.types] Variable types, if the field has them.
- * @param {string} [args.typeKey] Property name holding the variable type name.
- * @returns {Field[]} Subfields.
- */
-const getValueSubFields = ({ value, fields, types, typeKey = 'type' }) =>
-  fields ?? types?.find(({ name }) => name === value[typeKey])?.fields ?? [];
 
 /**
  * Renew the unique values in the given field value of a duplicated list item, so the duplicate
@@ -149,8 +137,8 @@ export const getInitialListExpanderStates = ({
 });
 
 /**
- * Create an item to be added to a List field with subfield(s): a copy of an existing item, or a new
- * one filled with the default values.
+ * Create an item to be added to a List field with subfield(s): a copy of an existing item or a
+ * pasted one, or a new one filled with the default values.
  * @param {object} args Arguments.
  * @param {any[]} args.valueList Current items of the list. Unless the list has a single subfield,
  * the items are tagged with their original key paths in place, as they’re about to shift.
@@ -158,6 +146,8 @@ export const getInitialListExpanderStates = ({
  * @param {number} [args.dupIndex] List index of the item to be duplicated, if any. If the list has
  * no item there, e.g. in another locale whose items don’t line up with the default locale’s, a new
  * item is created instead.
+ * @param {any} [args.sourceItem] Item to be copied instead, e.g. one pasted from the clipboard,
+ * conformed to the subfields.
  * @param {Field[]} args.subFields Subfields of the new item, used to fill in the default values.
  * @param {boolean} args.hasSingleSubField Whether the list has a single subfield, in which case the
  * items are the subfield values themselves rather than objects.
@@ -179,6 +169,7 @@ export const createListItem = ({
   valueList,
   keyPath,
   dupIndex,
+  sourceItem,
   subFields,
   hasSingleSubField,
   field,
@@ -190,8 +181,10 @@ export const createListItem = ({
   defaultLocale,
 }) => {
   const newItem = (() => {
-    if (typeof dupIndex === 'number' && dupIndex in valueList) {
-      const item = structuredClone(valueList[dupIndex]);
+    const isDuplicate = typeof dupIndex === 'number' && dupIndex in valueList;
+
+    if (sourceItem !== undefined || isDuplicate) {
+      const item = structuredClone(isDuplicate ? valueList[dupIndex] : sourceItem);
 
       if (hasSingleSubField && field) {
         return renewUniqueValue(item, field, renewedUuids);
@@ -221,8 +214,8 @@ export const createListItem = ({
     // Add a random ID to the new item to ensure it is unique. This is necessary for the `key`
     // attribute in the `each` block.
     newItem.__sc_item_id = crypto.randomUUID();
-    // A duplicated item is a new one, so it mustn’t keep the original position of its source, or a
-    // revert would treat it as the source item
+    // A duplicated or pasted item is a new one, so it mustn’t keep the original position of its
+    // source, or a revert would treat it as the source item
     delete newItem.__sc_item_original_key_path;
 
     // Track original key paths for existing items before they shift due to the insertion

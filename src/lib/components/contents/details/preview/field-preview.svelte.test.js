@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
 
+import { previews } from '$lib/components/contents/details/fields';
 import { customFieldTypeRegistry } from '$lib/services/api/registries';
 import { highlightEditorField } from '$lib/services/contents/editor/fields';
 import { initTestConfig } from '$lib/test/config';
@@ -52,7 +53,37 @@ const renderPreview = async ({
   return container;
 };
 
+/**
+ * Component that throws while it’s rendered, standing in for a field editor or preview with a bug.
+ * @throws {TypeError} Always.
+ */
+const BrokenComponent = () => {
+  throw new TypeError('boom');
+};
+
 describe('FieldPreview', () => {
+  test('shows a message in place of a preview that fails, keeping the label', async () => {
+    const { string } = previews;
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    previews.string = /** @type {any} */ (BrokenComponent);
+
+    try {
+      const container = await renderPreview({
+        fieldConfig: { name: 'title', widget: 'string', label: 'Title' },
+        values: { title: 'Hello' },
+      });
+
+      await expect
+        .element(page.getByRole('alert'))
+        .toMatchTextContent(/this field can’t be displayed\. .*boom/);
+      expect(container.querySelector('h4')).toHaveTextContent('Title');
+    } finally {
+      previews.string = string;
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   test('renders the preview for the field type under its label', async () => {
     const container = await renderPreview({
       fieldConfig: { name: 'title', widget: 'string', label: 'Title' },
@@ -81,6 +112,23 @@ describe('FieldPreview', () => {
         })
       ).querySelector('h4'),
     ).toBeNull();
+  });
+
+  test('shows the label in the locale of the pane', async () => {
+    const container = await renderPreview({
+      fieldConfig: {
+        name: 'title',
+        widget: 'string',
+        i18n: true,
+        label: 'Title',
+        label_localized: { ja: 'タイトル' },
+      },
+      values: { title: 'Hello' },
+      locale: 'ja',
+      i18nEnabled: true,
+    });
+
+    expect(container.querySelector('h4')).toHaveTextContent('タイトル');
   });
 
   test('passes the items of a multi-value field', async () => {

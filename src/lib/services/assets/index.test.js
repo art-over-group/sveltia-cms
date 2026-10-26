@@ -53,7 +53,6 @@ vi.mock('@sveltia/utils/string', async () => {
     stripSlashes: vi.fn(),
   };
 });
-vi.mock('flat');
 vi.mock('$lib/services/assets/name', () => ({
   createAssetNameTemplate: vi.fn((template) => ({ template })),
   fillAssetNameTemplate: vi.fn(() => 'renamed.jpg'),
@@ -2584,6 +2583,76 @@ describe('assets/index', () => {
       // The resolved 'abc' folder (not the literal '{{filename}}') must be used
       expect(createPath).toHaveBeenCalledWith(['source/_posts', 'abc', 'img0.jpg']);
     });
+
+    it('should resolve template tags in public_folder before stripping it from the stored path', async () => {
+      // An absolute `media_folder` and an entry-relative `public_folder` that both have `{{slug}}`:
+      // the raw `public_folder` never matched the stored value, so the whole value was appended to
+      // the `media_folder` and the asset couldn’t be found
+      // @see https://github.com/sveltia/sveltia-cms/issues/1104
+      const { resolvePath, createPath } = await import('$lib/services/utils/file');
+      const { fillTemplate } = await import('$lib/services/common/template');
+      const { hasTemplateTags } = await import('$lib/services/common/template/tags');
+
+      const mockAsset = {
+        path: 'assets/realisations/my-project/photo-1.jpg',
+        name: 'photo-1.jpg',
+        sha: 'abc123',
+        size: 1024,
+        kind: /** @type {import('$lib/types/private').AssetKind} */ ('image'),
+        folder: createMockAssetFolder({
+          collectionName: 'realisations',
+          internalPath: 'assets/realisations/{{slug}}',
+          publicPath: '../../assets/realisations/{{slug}}',
+        }),
+      };
+
+      const mockEntry = /** @type {any} */ ({
+        id: 'my-project',
+        slug: 'my-project',
+        locales: {
+          en: {
+            path: 'content/realisations/my-project.md',
+            sha: 'sha123',
+            slug: 'my-project',
+            content: { cover: '../../assets/realisations/my-project/photo-1.jpg' },
+          },
+        },
+      });
+
+      const mockCollection = /** @type {any} */ ({
+        name: 'realisations',
+        folder: 'content/realisations',
+        media_folder: '/assets/realisations/{{slug}}',
+        public_folder: '../../assets/realisations/{{slug}}',
+        _i18n: { defaultLocale: 'en' },
+      });
+
+      vi.mocked(hasTemplateTags).mockReturnValueOnce(true).mockReturnValueOnce(true);
+      vi.mocked(fillTemplate)
+        .mockReturnValueOnce('/assets/realisations/my-project')
+        .mockReturnValueOnce('../../assets/realisations/my-project');
+      vi.mocked(createPath).mockReturnValue('assets/realisations/my-project/photo-1.jpg');
+      vi.mocked(resolvePath).mockReturnValue('assets/realisations/my-project/photo-1.jpg');
+      allAssets.current = [mockAsset];
+
+      const result = getAssetByRelativePathAndCollection({
+        path: '../../assets/realisations/my-project/photo-1.jpg',
+        entry: mockEntry,
+        collection: mockCollection,
+      });
+
+      expect(result).toEqual(mockAsset);
+      expect(fillTemplate).toHaveBeenCalledWith(
+        '../../assets/realisations/{{slug}}',
+        expect.objectContaining({
+          type: 'media_folder',
+          collection: mockCollection,
+          entryFilePath: 'content/realisations/my-project.md',
+        }),
+      );
+      // The resolved `public_folder` prefix is stripped, leaving only the file name
+      expect(createPath).toHaveBeenCalledWith(['assets/realisations/my-project', 'photo-1.jpg']);
+    });
   });
 
   describe('entry-relative assets with a locale folder per locale', () => {
@@ -3865,7 +3934,6 @@ describe('assets/index', () => {
       const { getAssetFolder, globalAssetFolder } = await import('$lib/services/assets/folders');
       const { getAssociatedCollections } = await import('$lib/services/contents/entry/collections');
       const { fillTemplate } = await import('$lib/services/common/template');
-      const { flatten } = await import('flat');
       const { createPath } = await import('$lib/services/utils/file');
 
       const mockEntry = /** @type {any} */ ({
@@ -3924,7 +3992,6 @@ describe('assets/index', () => {
       // Setup mocks for template resolution
       vi.mocked(getAssociatedCollections).mockReturnValue([mockCollection]);
       vi.mocked(fillTemplate).mockReturnValue('content/posts/my-post/media');
-      vi.mocked(flatten).mockReturnValue({ slug: 'my-post' });
       vi.mocked(createPath).mockReturnValue('content/posts/my-post/media/photo.jpg');
 
       allAssets.current = [mockAsset];
@@ -5029,13 +5096,11 @@ describe('assets/index', () => {
     it('should fill all the template tags using the collection and entry', async () => {
       const { getCollection } = await import('$lib/services/contents/collection');
       const { fillTemplate } = await import('$lib/services/common/template');
-      const { flatten } = await import('flat');
 
       const { isCollectionIndexFile } =
         await import('$lib/services/contents/collection/entries/index-file');
 
       vi.mocked(getCollection).mockReturnValue(mockCollection);
-      vi.mocked(flatten).mockReturnValue({ title: 'My Post' });
       vi.mocked(isCollectionIndexFile).mockReturnValue(false);
       vi.mocked(fillTemplate).mockReturnValue('content/posts/2024/my-post/media');
 

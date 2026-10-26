@@ -5,7 +5,7 @@ import {
 } from '$lib/services/backends/git/gitlab/repository';
 import { fetchAPI } from '$lib/services/backends/git/shared/api';
 import { runConcurrently } from '$lib/services/backends/git/shared/concurrency';
-import { resolveDeployments } from '$lib/services/backends/git/shared/deployment';
+import { collectSafely, resolveDeployments } from '$lib/services/backends/git/shared/deployment';
 
 /**
  * @import { DeployState, DeployStatus, DeployTarget } from '$lib/types/private';
@@ -54,6 +54,21 @@ const DEPLOYMENT_STATUS_MAP = {
   failed: 'error',
   canceled: 'error',
 };
+
+/**
+ * Manually trigger a deployment by creating a pipeline on the configured branch. Unlike a push
+ * pipeline, one created through the API runs even when the head commit message has `[skip ci]`.
+ * @returns {Promise<Response>} Response.
+ * @see https://docs.gitlab.com/api/pipelines/#create-a-new-pipeline
+ */
+export const triggerDeployment = async () =>
+  /** @type {Promise<Response>} */ (
+    fetchAPI(`/projects/${getProjectId()}/pipeline`, {
+      method: 'POST',
+      body: { ref: repository.branch },
+      responseType: 'raw',
+    })
+  );
 
 /**
  * Fetch the head commit of the configured branch, which is the commit the production site is built
@@ -147,19 +162,6 @@ const collectStatusCandidates = async ({ sha }, candidateMap) => {
 };
 
 /**
- * Run a collector, reporting a failure without failing the batch.
- * @param {() => Promise<void>} task Task to run.
- */
-const collectSafely = async (task) => {
-  try {
-    await task();
-  } catch (ex) {
-    // eslint-disable-next-line no-console
-    console.warn('Failed to fetch the deployment info.', ex);
-  }
-};
-
-/**
  * Collect deploy candidates for the given commits from the project’s deployments and from each
  * commit’s statuses.
  * @param {string[]} shas Commit SHAs.
@@ -168,7 +170,7 @@ const collectSafely = async (task) => {
 const collectCandidates = async (shas, candidateMap) => {
   await Promise.all([
     collectSafely(() => collectDeploymentCandidates(candidateMap)),
-    runConcurrently(shas, async (sha) =>
+    runConcurrently(shas, (sha) =>
       collectSafely(() =>
         collectStatusCandidates({ sha, branch: '', kind: 'preview' }, candidateMap),
       ),

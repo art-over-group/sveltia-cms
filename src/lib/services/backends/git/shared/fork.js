@@ -1,7 +1,6 @@
-import { sleep } from '@sveltia/utils/misc';
-
 import { runConcurrently } from '$lib/services/backends/git/shared/concurrency';
 import { createLocalizedError } from '$lib/services/backends/git/shared/errors';
+import { pollUntil } from '$lib/services/backends/git/shared/poll';
 import { cmsConfig } from '$lib/services/config';
 import {
   ENTRY_ALREADY_PUBLISHED,
@@ -84,6 +83,61 @@ export const ensureForkPermission = async ({ repoPath, allowForking }) => {
 };
 
 /**
+ * Log the given failure to create a fork and create an error that tells the user about it.
+ * @param {string} repoPath Repository path that was to be forked, e.g. `owner/repo`.
+ * @param {Error} ex Failure.
+ * @returns {Error} Error to throw.
+ */
+export const createForkError = (repoPath, ex) => {
+  // eslint-disable-next-line no-console
+  console.error('Failed to fork the repository.', ex);
+
+  return createLocalizedError('Failed to fork the repository.', 'open_authoring.fork_failed', {
+    repo: repoPath,
+  });
+};
+
+/**
+ * Ask the service to fork the configured repository, falling back to another name when the
+ * contributor already has an unrelated repository at the default one. Unlike GitHub, which picks
+ * another name itself, Gitea/Forgejo and GitLab refuse the request then.
+ * @param {object} args Arguments.
+ * @param {string} args.repoPath Repository path to be forked, e.g. `owner/repo`, for the error
+ * message.
+ * @param {() => Promise<any>} args.requestFork Function to request a fork at the default name.
+ * @param {() => Promise<any>} args.requestRenamedFork Function to request a fork at the fallback
+ * name.
+ * @param {number[]} args.conflictStatuses HTTP status codes the service refuses a name that’s
+ * already taken with.
+ * @param {() => Promise<boolean>} args.isNameTaken Function to check whether the contributor has a
+ * repository at the default name, which tells a name conflict from any other refusal, e.g. a fork
+ * of the repository that already exists, or forking being turned off.
+ * @returns {Promise<Record<string, any>>} Service’s response describing the new fork.
+ * @throws {Error} When the fork could not be created.
+ */
+export const requestForkWithFallbackName = async ({
+  repoPath,
+  requestFork,
+  requestRenamedFork,
+  conflictStatuses,
+  isNameTaken,
+}) => {
+  try {
+    return await requestFork();
+  } catch (/** @type {any} */ ex) {
+    if (!conflictStatuses.includes(ex.cause?.status) || !(await isNameTaken())) {
+      throw createForkError(repoPath, ex);
+    }
+  }
+
+  try {
+    return await requestRenamedFork();
+  } catch (/** @type {any} */ ex) {
+    throw createForkError(repoPath, ex);
+  }
+};
+
+/**
  * Wait until a newly requested fork can be committed to. A service creates a fork asynchronously
  * and the request returns before the copy is complete, so committing to it right away could fail.
  * @param {object} args Arguments.
@@ -91,12 +145,15 @@ export const ensureForkPermission = async ({ repoPath, allowForking }) => {
  * @param {() => Promise<'ready' | 'pending' | 'failed'>} args.checkFork Function to report how far
  * the copy has got. `failed` is for a service that says it has given up, which no amount of waiting
  * will change.
- * @param {number} [args.attemptsLeft] Number of attempts remaining, used for the recursive retry.
+ * @param {number} [args.attemptsLeft] Number of checks at most, including the first one.
  * @throws {Error} When the fork hasn’t become available within the allotted time, or the copy
  * failed outright.
  */
 export const pollForFork = async ({ repoPath, checkFork, attemptsLeft = FORK_POLL.attempts }) => {
-  const status = await checkFork();
+  const status = await pollUntil(checkFork, (value) => value !== 'pending', {
+    ...FORK_POLL,
+    attempts: attemptsLeft,
+  });
 
   if (status === 'ready') {
     return;
@@ -110,16 +167,11 @@ export const pollForFork = async ({ repoPath, checkFork, attemptsLeft = FORK_POL
     });
   }
 
-  if (attemptsLeft <= 1) {
-    throw createLocalizedError(
-      'Timed out waiting for the fork to be created.',
-      'open_authoring.fork_failed',
-      { repo: repoPath },
-    );
-  }
-
-  await sleep(FORK_POLL.interval);
-  await pollForFork({ repoPath, checkFork, attemptsLeft: attemptsLeft - 1 });
+  throw createLocalizedError(
+    'Timed out waiting for the fork to be created.',
+    'open_authoring.fork_failed',
+    { repo: repoPath },
+  );
 };
 
 /**
